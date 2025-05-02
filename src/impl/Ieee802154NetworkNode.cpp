@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <cstring>
 #include <esp_log.h>
-#include <format>
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
 #include <freertos/task.h>
@@ -321,8 +320,10 @@ bool Ieee802154NetworkNode::performFirmwareUpdate(FirmwareUpdate &firmware_updat
   ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- MD5 checksum: %s", firmware_update.md5);
   ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- URL: %s", firmware_update.url);
 
-  std::string hostname = std::format("0x{:016x}", _host_address);
-  WiFiHelper _wifi_helper(hostname.c_str());
+  char hostname[64];
+  sprintf(hostname, "ieee802154_node_0x%016llx", _host_address);
+  std::string hostname_str(hostname);
+  WiFiHelper _wifi_helper(hostname);
 
   // Turn of 802.15.4
   teardown();
