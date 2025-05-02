@@ -1,13 +1,9 @@
-version: "1.0.0"
+version: "0.7.0"
 description: IEEE 802.15.4 Network Node.
 url: https://github.com/Johboh/ieee-802_15_4-network-node
 dependencies:
-  idf: ">=5.1.6"
-  ieee-802_15_4:
-    path: ../ieee-802_15_4
-  GCMEncryption:
-    path: ../GCMEncryption
-  ieee-802_15_4-network-shared:
-    path: ../ieee-802_15_4-network-shared
-  johboh/connectionhelper:
-    version: ">=3.0.10"
+  idf: ">=5.1.0"
+  johboh/ieee-802_15_4: ">=0.5.2"
+  johboh/gcmencryption: ">=0.2.0"
+  johboh/ieee-802_15_4-network-shared: ">=0.6.0"
+  johboh/connectionhelper: ">=3.0.10"
