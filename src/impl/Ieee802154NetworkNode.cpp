@@ -9,11 +9,8 @@
 #include <nvs_flash.h>
 
 Ieee802154NetworkNode::Ieee802154NetworkNode(Configuration configuration)
-    : _ieee802154({
-          .channel = 0,
-          .pan_id = configuration.pan_id,
-      }),
-      _nvs_storage("Ieee802154"), _configuration(configuration),
+    : _ieee802154({.channel = 0, .pan_id = configuration.pan_id}), _nvs_storage("Ieee802154"),
+      _configuration(configuration),
       _gcm_encryption(configuration.gcm_encryption_key, configuration.gcm_encryption_secret, false) {}
 
 bool Ieee802154NetworkNode::sendMessage(std::vector<uint8_t> message) {
@@ -135,10 +132,10 @@ bool Ieee802154NetworkNode::performDiscovery() {
       _host_address = message.source_address;
       _nvs_storage.writeToNVS(NVS_KEY_HOST, message.source_address);
       xEventGroupSetBits(event_group, 1);
-      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "Got disovery response with channel %d and host 0x%llx",
+      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got disovery response with channel %d and host 0x%llx",
                response->channel, _host_address);
     } else {
-      ESP_LOGW(Ieee802154NetworkNodeLog::TAG, "Got unknown message %d while waiting for device discovery respose",
+      ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Got unknown message %d while waiting for device discovery respose",
                message_id);
     }
   });
@@ -149,10 +146,10 @@ bool Ieee802154NetworkNode::performDiscovery() {
   auto encrypted = _gcm_encryption.encrypt(&discovery_request, sizeof(Ieee802154NetworkShared::DiscoveryRequestV1));
   uint8_t channel = 11;
   for (; channel <= 26; ++channel) {
-    ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "Discovering on channel %d...", channel);
+    ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Discovering on channel %d...", channel);
     _ieee802154.setChannel(channel);
     // Broadcast never emit ACKs.
-    _ieee802154.transmit(__UINT64_MAX__, encrypted.data(), encrypted.size());
+    _ieee802154.broadcast(encrypted.data(), encrypted.size());
     /*if (r) {
       // Got ack.
       ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "Got ACK for device request (in loop)");
@@ -162,13 +159,13 @@ bool Ieee802154NetworkNode::performDiscovery() {
     auto bits = xEventGroupWaitBits(event_group, 1, pdFALSE, pdFALSE, 1);
     auto found_host = ((bits & 1) != 0);
     if (found_host) {
-      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "Got device response for device request (in loop)");
+      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got device response for device request (in loop)");
       break;
     }
   }
 
   if (channel > 26) {
-    ESP_LOGW(Ieee802154NetworkNodeLog::TAG, "Sent device discovery on all channels without successful ACK");
+    ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Sent device discovery on all channels without successful ACK");
   }
 
   // Wait for data with timeout.
@@ -176,9 +173,9 @@ bool Ieee802154NetworkNode::performDiscovery() {
   auto found_host = ((bits & 1) != 0);
 
   if (!found_host) {
-    ESP_LOGW(Ieee802154NetworkNodeLog::TAG, "Never received device discovery response");
+    ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Never received device discovery response");
   } else {
-    ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "Host found during device discovery");
+    ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Host found during device discovery");
   }
 
   _ieee802154.receive({}); // Stop receiving.
@@ -188,8 +185,130 @@ bool Ieee802154NetworkNode::performDiscovery() {
 bool Ieee802154NetworkNode::requestData() {
   ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "Requesting data");
 
+  auto result = _ieee802154.dataRequest(_host_address);
+
+  if (result == Ieee802154::DataRequestResult::Failure) {
+    ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Failed to request data");
+    return false;
+  }
+
+  if (result == Ieee802154::DataRequestResult::NoDataAvailable) {
+    ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- No data available.");
+    return true;
+  }
+
+  // We have data. Wait for it.
+  ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Data available, waiting");
+  EventGroupHandle_t event_group = xEventGroupCreate();
+  _ieee802154.receive([&](Ieee802154::Message message) {
+    auto decrypted = _gcm_encryption.decrypt(message.payload);
+    uint8_t message_id = decrypted.data()[0];
+    switch (message_id) {
+    case Ieee802154NetworkShared::MESSAGE_ID_PENDING_TIMESTAMP_RESPONSE_V1: {
+      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingTimestampResponseV1");
+      Ieee802154NetworkShared::PendingTimestampResponseV1 *response =
+          reinterpret_cast<Ieee802154NetworkShared::PendingTimestampResponseV1 *>(decrypted.data());
+      auto timestamp = response->timestamp;
+      _pending_timestamp = timestamp;
+      xEventGroupSetBits(event_group, 1);
+      break;
+    }
+
+    case Ieee802154NetworkShared::MESSAGE_ID_PENDING_PAYLOAD_RESPONSE_V1: {
+      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingPayloadResponseV1");
+      _pending_payload = std::vector<uint8_t>(
+          decrypted.begin() + sizeof(Ieee802154NetworkShared::PendingPayloadResponseV1), decrypted.end());
+      xEventGroupSetBits(event_group, 1);
+      break;
+    }
+
+    case Ieee802154NetworkShared::MESSAGE_ID_PENDING_FIRMWARE_WIFI_CREDENTIALS_RESPONSE_V1: {
+      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingFirmwareWifiCredentialsResponseV1");
+      Ieee802154NetworkShared::PendingFirmwareWifiCredentialsResponseV1 *response =
+          reinterpret_cast<Ieee802154NetworkShared::PendingFirmwareWifiCredentialsResponseV1 *>(decrypted.data());
+      if (!_pending_firmware) {
+        FirmwareUpdate empty_firmware_update;
+        _pending_firmware = empty_firmware_update;
+      }
+      strncpy(_pending_firmware->wifi_ssid, response->wifi_ssid, sizeof(_pending_firmware->wifi_ssid));
+      strncpy(_pending_firmware->wifi_password, response->wifi_password, sizeof(_pending_firmware->wifi_password));
+      xEventGroupSetBits(event_group, 1);
+
+      break;
+    }
+
+    case Ieee802154NetworkShared::MESSAGE_ID_PENDING_FIRMWARE_CHECKSUM_RESPONSE_V1: {
+      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingFirmwareChecksumResponseV1");
+      Ieee802154NetworkShared::PendingFirmwareChecksumResponseV1 *response =
+          reinterpret_cast<Ieee802154NetworkShared::PendingFirmwareChecksumResponseV1 *>(decrypted.data());
+      if (!_pending_firmware) {
+        FirmwareUpdate empty_firmware_update;
+        _pending_firmware = empty_firmware_update;
+      }
+      strncpy(_pending_firmware->md5, response->md5, sizeof(_pending_firmware->md5));
+      xEventGroupSetBits(event_group, 1);
+
+      break;
+    }
+
+    case Ieee802154NetworkShared::MESSAGE_ID_PENDING_FIRMWARE_URL_RESPONSE_V1: {
+      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingFirmwareUrlResponseV1");
+      Ieee802154NetworkShared::PendingFirmwareUrlResponseV1 *response =
+          reinterpret_cast<Ieee802154NetworkShared::PendingFirmwareUrlResponseV1 *>(decrypted.data());
+      if (!_pending_firmware) {
+        FirmwareUpdate empty_firmware_update;
+        _pending_firmware = empty_firmware_update;
+      }
+      strncpy(_pending_firmware->url, response->url, sizeof(_pending_firmware->url));
+      xEventGroupSetBits(event_group, 1);
+      break;
+    }
+
+    default:
+      ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Got unhandled message %d", message_id);
+      break;
+    }
+  });
+
+  // Wait until no more messages has been received within a period.
+  while (1) {
+    auto bits = xEventGroupWaitBits(event_group, 1, pdTRUE, pdFALSE, (1000 / portTICK_PERIOD_MS));
+    auto got_message = ((bits & 1) != 0);
+    if (!got_message) {
+      break;
+    }
+  }
+  ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Data wait complete");
+
+  _ieee802154.receive({}); // Stop receiving.
+
+  // If we now have a complete firmware update, lets go and update the firmware.
+  if (_pending_firmware) {
+    if (strlen(_pending_firmware->wifi_ssid) > 0 && strlen(_pending_firmware->wifi_password) > 0 &&
+        strlen(_pending_firmware->url) > 0) {
+      // Will never return.
+      return updateFirmware(*_pending_firmware);
+    } else {
+      ESP_LOGW(Ieee802154NetworkNodeLog::TAG,
+               " -- Got firmware update but with missing fields. Unable to perform firmware update.");
+    }
+  }
+
+  return true;
+}
+
+bool Ieee802154NetworkNode::updateFirmware(FirmwareUpdate &firmware_update) {
+  ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "Performing firmware update");
+  ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- SSID: %s", firmware_update.wifi_ssid);
+  ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Password (length): %d", strlen(firmware_update.wifi_password));
+  ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- MD5 checksum: %s", firmware_update.md5);
+  ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- URL: %s", firmware_update.url);
+
   return false;
 }
+
+std::optional<uint64_t> Ieee802154NetworkNode::pendingTimestamp() { return _pending_timestamp; }
+std::optional<std::vector<uint8_t>> Ieee802154NetworkNode::pendingPayload() { return _pending_payload; }
 
 uint64_t Ieee802154NetworkNode::deviceMacAddress() { return _ieee802154.deviceMacAddress(); }
 
