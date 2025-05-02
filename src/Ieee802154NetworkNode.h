@@ -3,6 +3,7 @@
 #include "impl/NvsStorage.h"
 #include <GCMEncryption.h>
 #include <Ieee802154.h>
+#include <OtaHelper.h>
 #include <cstdint>
 #include <mutex>
 #include <optional>
@@ -99,13 +100,14 @@ private:
   bool sendApplicationMessage(uint8_t *message, uint8_t message_size);
   bool performDiscovery();
   bool requestData();
-  bool updateFirmware(FirmwareUpdate &firmware_update);
+  bool performFirmwareUpdate(FirmwareUpdate &firmware_update);
 
 private:
   static constexpr char NVS_KEY_HOST[] = "host";
   static constexpr char NVS_KEY_CHANNEL[] = "channel";
 
 private:
+  OtaHelper _ota_helper;
   Ieee802154 _ieee802154;
   NvsStorage _nvs_storage;
   Configuration _configuration;

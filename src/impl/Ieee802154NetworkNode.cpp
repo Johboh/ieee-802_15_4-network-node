@@ -1,17 +1,28 @@
 #include "Ieee802154NetworkNode.h"
 #include <Ieee802154NetworkShared.h>
+#include <WiFiHelper.h>
 #include <algorithm>
 #include <cstring>
 #include <esp_log.h>
+#include <format>
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
 #include <freertos/task.h>
 #include <nvs_flash.h>
+#include <string>
 
 Ieee802154NetworkNode::Ieee802154NetworkNode(Configuration configuration)
-    : _ieee802154({.channel = 0, .pan_id = configuration.pan_id}), _nvs_storage("Ieee802154"),
+    : _ota_helper({
+          .web_ota = {.enabled = false},
+          .arduino_ota = {.enabled = false},
+          .rollback_strategy = OtaHelper::RollbackStrategy::MANUAL,
+      }),
+      _ieee802154({.channel = 0, .pan_id = configuration.pan_id}), _nvs_storage("Ieee802154"),
       _configuration(configuration),
-      _gcm_encryption(configuration.gcm_encryption_key, configuration.gcm_encryption_secret, false) {}
+      _gcm_encryption(configuration.gcm_encryption_key, configuration.gcm_encryption_secret, false) {
+  esp_log_level_set(OtaHelperLog::TAG, ESP_LOG_ERROR);
+  esp_log_level_set(WiFiHelperLog::TAG, ESP_LOG_ERROR);
+}
 
 bool Ieee802154NetworkNode::sendMessage(std::vector<uint8_t> message) {
   return sendMessage(message.data(), message.size());
@@ -22,6 +33,7 @@ bool Ieee802154NetworkNode::sendMessage(uint8_t *message, uint8_t message_size) 
 
   if (!_nvs_initialized) {
     initializeNvs();
+    _ota_helper.cancelRollback();
     _nvs_initialized = true;
   }
 
@@ -287,7 +299,7 @@ bool Ieee802154NetworkNode::requestData() {
     if (strlen(_pending_firmware->wifi_ssid) > 0 && strlen(_pending_firmware->wifi_password) > 0 &&
         strlen(_pending_firmware->url) > 0) {
       // Will never return.
-      return updateFirmware(*_pending_firmware);
+      return performFirmwareUpdate(*_pending_firmware);
     } else {
       ESP_LOGW(Ieee802154NetworkNodeLog::TAG,
                " -- Got firmware update but with missing fields. Unable to perform firmware update.");
@@ -297,14 +309,41 @@ bool Ieee802154NetworkNode::requestData() {
   return true;
 }
 
-bool Ieee802154NetworkNode::updateFirmware(FirmwareUpdate &firmware_update) {
+bool Ieee802154NetworkNode::performFirmwareUpdate(FirmwareUpdate &firmware_update) {
   ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "Performing firmware update");
-  ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- SSID: %s", firmware_update.wifi_ssid);
-  ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Password (length): %d", strlen(firmware_update.wifi_password));
-  ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- MD5 checksum: %s", firmware_update.md5);
-  ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- URL: %s", firmware_update.url);
+  ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- SSID: %s", firmware_update.wifi_ssid);
+  ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Password (length): %d", strlen(firmware_update.wifi_password));
+  ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- MD5 checksum: %s", firmware_update.md5);
+  ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- URL: %s", firmware_update.url);
 
-  return false;
+  std::string hostname = std::format("0x{:016x}", _host_address);
+  WiFiHelper _wifi_helper(hostname.c_str());
+
+  // Turn of 802.15.4
+  teardown();
+
+  if (!_wifi_helper.connectToAp(firmware_update.wifi_ssid, firmware_update.wifi_password, false, 10000)) {
+    ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Unable to connect to WiFi. Firmware update aborted.");
+    _wifi_helper.disconnect();
+    return false;
+  }
+
+  // Start OTA.
+  auto url = std::string(firmware_update.url);
+  auto md5str = std::string(firmware_update.md5, firmware_update.md5 + 32);
+  ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Starting firmwate update from %s", firmware_update.url);
+  if (!_ota_helper.updateFrom(url, OtaHelper::FlashMode::FIRMWARE, md5str)) {
+    ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Failed to download firmware update.");
+    _wifi_helper.disconnect();
+    return false;
+  }
+
+  // Successful update. Restart.
+  ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Firmware update successful, restarting...");
+  vTaskDelay(1000 / portTICK_PERIOD_MS);
+  esp_restart();
+
+  return true;
 }
 
 std::optional<uint64_t> Ieee802154NetworkNode::pendingTimestamp() { return _pending_timestamp; }

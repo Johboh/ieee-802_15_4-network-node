@@ -9,3 +9,5 @@ dependencies:
     path: ../GCMEncryption
   ieee-802_15_4-network-shared:
     path: ../ieee-802_15_4-network-shared
+  johboh/connectionhelper:
+    version: ">=3.0.10"
