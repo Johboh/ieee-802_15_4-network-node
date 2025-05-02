@@ -39,7 +39,7 @@ void app_main(void) {
   };
   _ieee802154_node.sendMessage((uint8_t *)&message, sizeof(ApplicationMessage));
 
-  esp_sleep_enable_timer_wakeup(SLEEP_TIME_BEACON_US);
+  esp_sleep_enable_timer_wakeup(SLEEP_TIME_US);
   esp_sleep_config_gpio_isolate();
   esp_sleep_cpu_retention_init();
   esp_deep_sleep_try_to_start();
