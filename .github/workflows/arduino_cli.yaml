@@ -23,6 +23,7 @@ jobs:
           arduino-cli core update-index
           arduino-cli core install esp32:esp32@3.2.0
           arduino-cli lib install GCMEncryption
+          arduino-cli lib install ConnectionHelper
           arduino-cli lib install ieee-802_15_4
           arduino-cli lib install ieee-802_15_4-network-shared
 
