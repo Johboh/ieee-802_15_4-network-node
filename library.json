@@ -19,6 +19,13 @@
   },
   "frameworks": ["espidf"],
   "platforms": ["espressif32"],
+  "examples": [
+    {
+      "name": "ESP-IDF sleeping node",
+      "base": "examples/espidf/sleeping_node/main",
+      "files": ["main.cpp"]
+    }
+  ],
   "dependencies": [
     {
       "owner": "johboh",
