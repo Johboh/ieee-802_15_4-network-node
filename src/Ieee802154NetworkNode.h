@@ -55,9 +55,9 @@ public:
   /**
    * Send a message to the host.
    * If no host can be found or there is channel mismatch, will go into discovery mode and try to find the host.
-   * If a timestamp or payload was received during the send, the timestamp() and payload() functions will return this.
-   * In case of a firmware update, this function will never return and instead firmware will commence and the device
-   * will restart on update complete.
+   * If a timestamp or payload was received during the send, the pendingTimestamp() and pendingPayload() functions will
+   * return this. In case of a firmware update, this function will never return and instead firmware will commence and
+   * the device will restart on update complete.
    *
    * @param message the message to send. Maximum message size is 78 bytes.
    * @return true if message was delivered successfully.
@@ -66,9 +66,9 @@ public:
   /**
    * Send a message to the host.
    * If no host can be found or there is channel mismatch, will go into discovery mode and try to find the host.
-   * If a timestamp or payload was received during the send, the timestamp() and payload() functions will return this.
-   * In case of a firmware update, this function will never return and instead firmware will commence and the device
-   * will restart on update complete.
+   * If a timestamp or payload was received during the send, the pendingTimestamp() and pendingPayload() functions will
+   * return this. In case of a firmware update, this function will never return and instead firmware will commence and
+   * the device will restart on update complete.
    *
    * @param message the message to send.
    * @param message_size maxium message size is 78 bytes.
@@ -76,10 +76,18 @@ public:
    */
   bool sendMessage(uint8_t *message, uint8_t message_size);
 
+  /**
+   * If set, get the pending timestamp. Will clear any pending timestamp upon access.
+   */
   std::optional<uint64_t> pendingTimestamp();
+  /**
+   * If set, get the pending payload. Will clear any pending payload upon access.
+   */
   std::optional<std::vector<uint8_t>> pendingPayload();
 
-  void teardown();
+  /**
+   * Forget any previous stored channel and host MAC address.
+   */
   void forget();
 
   /**
@@ -97,6 +105,7 @@ private:
   };
 
   void initializeNvs();
+  void teardown();
   bool sendApplicationMessage(uint8_t *message, uint8_t message_size);
   bool performDiscovery();
   bool requestData();

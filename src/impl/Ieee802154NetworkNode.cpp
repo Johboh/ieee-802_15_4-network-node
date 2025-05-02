@@ -11,14 +11,19 @@
 #include <nvs_flash.h>
 #include <string>
 
+// Keep track of next sequence number during sleep.
+RTC_FAST_ATTR uint8_t _Ieee802154NetworkNode_next_sequence_number = 0;
+
 Ieee802154NetworkNode::Ieee802154NetworkNode(Configuration configuration)
     : _ota_helper({
           .web_ota = {.enabled = false},
           .arduino_ota = {.enabled = false},
           .rollback_strategy = OtaHelper::RollbackStrategy::MANUAL,
       }),
-      _ieee802154({.channel = 0, .pan_id = configuration.pan_id}), _nvs_storage("Ieee802154"),
-      _configuration(configuration),
+      _ieee802154({.channel = 0,
+                   .pan_id = configuration.pan_id,
+                   .initial_sequence_number = _Ieee802154NetworkNode_next_sequence_number}),
+      _nvs_storage("Ieee802154"), _configuration(configuration),
       _gcm_encryption(configuration.gcm_encryption_key, configuration.gcm_encryption_secret, false) {
   esp_log_level_set(OtaHelperLog::TAG, ESP_LOG_ERROR);
   esp_log_level_set(WiFiHelperLog::TAG, ESP_LOG_ERROR);
@@ -351,7 +356,11 @@ std::optional<std::vector<uint8_t>> Ieee802154NetworkNode::pendingPayload() { re
 
 uint64_t Ieee802154NetworkNode::deviceMacAddress() { return _ieee802154.deviceMacAddress(); }
 
-void Ieee802154NetworkNode::teardown() { return _ieee802154.teardown(); }
+void Ieee802154NetworkNode::teardown() {
+  // Store in RTC memory
+  _Ieee802154NetworkNode_next_sequence_number = _ieee802154.nextSequenceNumber();
+  return _ieee802154.teardown();
+}
 
 void Ieee802154NetworkNode::forget() {
   _nvs_storage.eraseKey(NVS_KEY_HOST);
