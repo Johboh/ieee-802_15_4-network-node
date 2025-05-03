@@ -20,6 +20,25 @@ The prmary use case for the Ieee 802.15.4 Network is to run a network of battery
 - **Remote configuration**: The host can send configuration or other payload to configure the nodes, like setting wakeup period or similar.
 
 ### Package flow and challenge requests
+```mermaid
+sequenceDiagram
+    participant Host
+    participant Node
+
+    Note right of Node: Sleeping...
+    Note right of Node: Zzz...
+
+    Node->>Host: Application Message
+    Host-->>Node: ACK
+    Node->>Host: Data Request
+    Host-->>Node: Data Available/No data available
+    alt Data available
+        Note right of Node: Waits for data...
+        Host->>Node: Timestamp, Payload or Firmare package
+        Note right of Node: Sets payload to application and/or perform firwmare update
+    end
+    Note right of Node: Goes baack to sleep
+```
 
 ### Installation
 #### PlatformIO (Arduino or ESP-IDF):
