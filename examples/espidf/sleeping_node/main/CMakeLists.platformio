@@ -1,0 +1,4 @@
+FILE(GLOB_RECURSE app_sources *.*)
+
+# Should potentially go to each dependency? GCMEncryption and ieee-802_15_4
+idf_component_register(SRCS ${app_sources} REQUIRES idf::mbedtls idf::ieee802154)
