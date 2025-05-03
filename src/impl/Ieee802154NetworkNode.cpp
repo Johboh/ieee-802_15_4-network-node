@@ -352,8 +352,16 @@ bool Ieee802154NetworkNode::performFirmwareUpdate(FirmwareUpdate &firmware_updat
   return true;
 }
 
-std::optional<uint64_t> Ieee802154NetworkNode::pendingTimestamp() { return _pending_timestamp; }
-std::optional<std::vector<uint8_t>> Ieee802154NetworkNode::pendingPayload() { return _pending_payload; }
+std::optional<uint64_t> Ieee802154NetworkNode::pendingTimestamp() {
+  auto pending = _pending_timestamp;
+  _pending_timestamp = std::nullopt;
+  return pending;
+}
+std::optional<std::vector<uint8_t>> Ieee802154NetworkNode::pendingPayload() {
+  auto pending = _pending_payload;
+  _pending_payload = std::nullopt;
+  return pending;
+}
 
 uint64_t Ieee802154NetworkNode::deviceMacAddress() { return _ieee802154.deviceMacAddress(); }
 
