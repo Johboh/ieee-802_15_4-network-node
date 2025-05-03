@@ -28,6 +28,7 @@ struct __attribute__((packed)) ApplicationMessage {
 
 Ieee802154NetworkNode _ieee802154_node({.gcm_encryption_key = gcm_encryption_key,
                                         .gcm_encryption_secret = gcm_encryption_secret,
+                                        .firmware_version = 0xabcd, // Get from build version
                                         .pan_id = 0x1234});
 
 extern "C" {

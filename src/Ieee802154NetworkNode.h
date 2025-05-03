@@ -39,6 +39,11 @@ public:
      */
     const char *gcm_encryption_secret;
     /**
+     * This is the firmware version of the node. This is important so the host knows when to indicate when there is a
+     * new firmware, and only send a firmware update payload if so. Incremental.
+     */
+    const uint32_t firmware_version;
+    /**
      * Private Area Network Identifier. Should be same between host and node.
      */
     uint16_t pan_id = DEFAULT_PAN_ID;
@@ -59,7 +64,7 @@ public:
    * return this. In case of a firmware update, this function will never return and instead firmware will commence and
    * the device will restart on update complete.
    *
-   * @param message the message to send. Maximum message size is 78 bytes.
+   * @param message the message to send. Maximum message size is 74 bytes.
    * @return true if message was delivered successfully.
    */
   bool sendMessage(std::vector<uint8_t> message);
@@ -71,7 +76,7 @@ public:
    * the device will restart on update complete.
    *
    * @param message the message to send.
-   * @param message_size maxium message size is 78 bytes.
+   * @param message_size maxium message size is 74 bytes.
    * @return true if message was delivered successfully.
    */
   bool sendMessage(uint8_t *message, uint8_t message_size);

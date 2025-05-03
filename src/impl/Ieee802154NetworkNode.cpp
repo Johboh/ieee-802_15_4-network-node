@@ -124,6 +124,7 @@ bool Ieee802154NetworkNode::sendApplicationMessage(uint8_t *message, uint8_t mes
   Ieee802154NetworkShared::MessageV1 *wire_message =
       reinterpret_cast<Ieee802154NetworkShared::MessageV1 *>(buffer.get());
   wire_message->id = Ieee802154NetworkShared::MESSAGE_ID_MESSAGE;
+  wire_message->firmware_version = _configuration.firmware_version;
   memcpy(wire_message->payload, message, message_size);
 
   auto encrypted = _gcm_encryption.encrypt(wire_message, wire_message_size);
