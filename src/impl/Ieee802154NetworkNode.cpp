@@ -159,35 +159,33 @@ bool Ieee802154NetworkNode::performDiscovery() {
 
   // Discover on all channels.
   // Reduce number of retries.
-  _ieee802154.setNumberOfDataFramesRetries(10);
   auto encrypted = _gcm_encryption.encrypt(&discovery_request, sizeof(Ieee802154NetworkShared::DiscoveryRequestV1));
-  uint8_t channel = 11;
-  for (; channel <= 26; ++channel) {
-    ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Discovering on channel %d...", channel);
-    _ieee802154.setChannel(channel);
-    // Broadcast never emit ACKs.
-    _ieee802154.broadcast(encrypted.data(), encrypted.size());
-    /*if (r) {
-      // Got ack.
-      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "Got ACK for device request (in loop)");
-      break;
-    }*/
-    // Also check if we got a message that we want.
-    auto bits = xEventGroupWaitBits(event_group, 1, pdFALSE, pdFALSE, 1);
-    auto found_host = ((bits & 1) != 0);
+  bool found_host = false;
+  // Try each channel one by one a couple of times.
+  for (uint8_t channel = 26; channel >= 11; --channel) {
+    for (uint8_t attempt = 1; attempt <= 4; ++attempt) {
+      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Discovering on channel %d, attempt %d...", channel, attempt);
+      _ieee802154.setChannel(channel);
+      // Broadcast never emit ACKs.
+      _ieee802154.broadcast(encrypted.data(), encrypted.size());
+
+      // Also check if we got a message that we want.
+      // If we wait to short here, we will switch channel too fast before being able to receive frame.
+      auto bits = xEventGroupWaitBits(event_group, 1, pdFALSE, pdFALSE, (30 / portTICK_PERIOD_MS));
+      found_host = ((bits & 1) != 0);
+      if (found_host) {
+        ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got device response for device request (in loop)");
+        break;
+      }
+    }
     if (found_host) {
-      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got device response for device request (in loop)");
       break;
     }
   }
 
-  if (channel > 26) {
-    ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Sent device discovery on all channels without successful ACK");
-  }
-
   // Wait for data with timeout.
   auto bits = xEventGroupWaitBits(event_group, 1, pdTRUE, pdFALSE, (1000 / portTICK_PERIOD_MS));
-  auto found_host = ((bits & 1) != 0);
+  found_host = ((bits & 1) != 0);
 
   if (!found_host) {
     ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Never received device discovery response");
