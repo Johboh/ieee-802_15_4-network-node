@@ -21,21 +21,23 @@ const char gcm_encryption_secret[] = "01234567"; // Must be exact 8 bytes long. 
 
 // Shared between node and host. Keep this in you own shared .h file.
 struct __attribute__((packed)) ApplicationMessage {
-  uint64_t magic = 0x56322abc24;
   double temperature;
-  uint64_t magic2 = 0xdeadbeefaabbccdd;
 };
 
-Ieee802154NetworkNode _ieee802154_node({.gcm_encryption_key = gcm_encryption_key,
-                                        .gcm_encryption_secret = gcm_encryption_secret,
-                                        .firmware_version = 0xabcd, // Get from build version
-                                        .pan_id = 0x1234});
+Ieee802154NetworkNode _ieee802154_node({
+    .gcm_encryption_key = gcm_encryption_key,
+    .gcm_encryption_secret = gcm_encryption_secret,
+    .firmware_version = 0xabcd, // Get from build version
+    .pan_id = 0x1234,
+});
 
 extern "C" {
 void app_main();
 }
 
 void app_main(void) {
+  ESP_LOGI(LOG_TAG, "This device IEEE802.15.4 MAC: 0x%llx", _ieee802154_node.deviceMacAddress());
+
   ApplicationMessage message = {
       .temperature = 25.2,
   };
