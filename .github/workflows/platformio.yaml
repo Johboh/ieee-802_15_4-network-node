@@ -49,12 +49,6 @@ jobs:
         run: mv ${{ matrix.target.library }} ./ || true
         if: ${{ matrix.target.library != './library.json' }}
 
-      - name: Copy specific platformio CmakeLists to CMakeLists.txt
-        run: |
-          if [ -f "${{ matrix.target.path }}/CMakeLists.platformio" ]; then
-            mv ${{ matrix.target.path }}/CMakeLists.platformio ${{ matrix.target.path }}/CMakeLists.txt
-          fi
-
       - name: Build PlatformIO targets
         run: ${{ env.PLATFORMIO_CI_BASE_CMD }} --project-option="lib_deps=${{ matrix.target.extra_dependencies }}"
         env:
