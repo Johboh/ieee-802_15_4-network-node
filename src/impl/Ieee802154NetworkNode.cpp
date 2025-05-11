@@ -319,8 +319,8 @@ bool Ieee802154NetworkNode::performFirmwareUpdate(FirmwareUpdate &firmware_updat
   ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- MD5 checksum: %s", firmware_update.md5);
   ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- URL: %s", firmware_update.url);
 
-  char hostname[64];
-  sprintf(hostname, "ieee802154_node_0x%016llx", _host_address);
+  char hostname[32]; // Max allowed is 32
+  sprintf(hostname, "ieee802154node_%llx", _host_address);
   std::string hostname_str(hostname);
   WiFiHelper _wifi_helper(hostname);
 
