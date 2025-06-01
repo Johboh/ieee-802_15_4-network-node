@@ -39,7 +39,7 @@ jobs:
         run: pip install --upgrade platformio
 
       - name: PlatformIO ESP-IDF shenanigans, idf_component.yaml
-        run: cp idf_component.yaml ${{ matrix.target.path }}/main/idf_component.yaml
+        run: cp idf_component.yml ${{ matrix.target.path }}/main/idf_component.yml
 
       - name: PlatformIO ESP-IDF shenanigans, partitions_with_ota.csv
         run: cp ${{ matrix.target.path }}/partitions_with_ota.csv ${{ matrix.target.path }}/main/partitions_with_ota.csv
