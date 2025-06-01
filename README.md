@@ -40,7 +40,12 @@ sequenceDiagram
 
 ### Installation
 #### PlatformIO using ESP-IDF framework (Arduino for PlatformIO not supported, see notes under [Compatibility](#compatibility)):
-Copy the dependencies from [idf_component.yml](./idf_component.yml) to a new or existing `idf_component.yaml` in your `src` or `main` folder.
+In your existing `idf_component.yml` or in a new `idf_component.yml` in your `src` or `main` folder:
+```
+dependencies:
+  johboh/ieee-802_15_4-network-node:
+    version: ">=0.7.0"
+```
 
 #### Arduino IDE:
 Search for `ieee-802_15_4-network-node` by `johboh` in the library manager.
