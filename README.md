@@ -39,17 +39,14 @@ sequenceDiagram
 ```
 
 ### Installation
-#### PlatformIO (Arduino or ESP-IDF):
-Add the following to `lib_deps`:
-```
-   Johboh/ieee-802_15_4-network-node
-```
+#### PlatformIO using ESP-IDF framework (Arduino for PlatformIO not supported, see notes under [Compatibility](#compatibility)):
+Copy the dependencies from [idf_component.yml](./idf_component.yml) to a new or existing `idf_component.yaml` in your `src` or `main` folder.
 
 #### Arduino IDE:
 Search for `ieee-802_15_4-network-node` by `johboh` in the library manager.
 
 #### Espressif IoT Development Framework:
-In your existing `idf_component.yml` or in a new `idf_component.yml` next to your main component:
+In your existing `idf_component.yml` or in a new `idf_component.yml` in your `main` folder:
 ```
 dependencies:
   johboh/ieee-802_15_4-network-node:
