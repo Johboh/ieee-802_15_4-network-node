@@ -214,6 +214,10 @@ bool Ieee802154NetworkNode::requestData() {
 
   // We have data. Wait for it.
   ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Data available, waiting");
+  uint32_t firmware_url_identifier = 0;
+  uint32_t firmware_checksum_identifier = 0;
+  uint32_t firmware_credentials_identifier = 0;
+
   EventGroupHandle_t event_group = xEventGroupCreate();
   _ieee802154.receive([&](Ieee802154::Message message) {
     auto decrypted = _gcm_encryption.decrypt(message.payload);
@@ -247,6 +251,7 @@ bool Ieee802154NetworkNode::requestData() {
       }
       strncpy(_pending_firmware->wifi_ssid, response->wifi_ssid, sizeof(_pending_firmware->wifi_ssid));
       strncpy(_pending_firmware->wifi_password, response->wifi_password, sizeof(_pending_firmware->wifi_password));
+      firmware_credentials_identifier = response->identifier;
       xEventGroupSetBits(event_group, 1);
 
       break;
@@ -261,6 +266,7 @@ bool Ieee802154NetworkNode::requestData() {
         _pending_firmware = empty_firmware_update;
       }
       strncpy(_pending_firmware->md5, response->md5, sizeof(_pending_firmware->md5));
+      firmware_checksum_identifier = response->identifier;
       xEventGroupSetBits(event_group, 1);
 
       break;
@@ -275,6 +281,7 @@ bool Ieee802154NetworkNode::requestData() {
         _pending_firmware = empty_firmware_update;
       }
       strncpy(_pending_firmware->url, response->url, sizeof(_pending_firmware->url));
+      firmware_url_identifier = response->identifier;
       xEventGroupSetBits(event_group, 1);
       break;
     }
@@ -299,8 +306,11 @@ bool Ieee802154NetworkNode::requestData() {
 
   // If we now have a complete firmware update, lets go and update the firmware.
   if (_pending_firmware) {
-    if (strlen(_pending_firmware->wifi_ssid) > 0 && strlen(_pending_firmware->wifi_password) > 0 &&
-        strlen(_pending_firmware->url) > 0) {
+    if (firmware_credentials_identifier != firmware_url_identifier ||
+        firmware_credentials_identifier != firmware_checksum_identifier) {
+      ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Got firmware update but identifiers does not match in messages.");
+    } else if (strlen(_pending_firmware->wifi_ssid) > 0 && strlen(_pending_firmware->wifi_password) > 0 &&
+               strlen(_pending_firmware->url) > 0) {
 
       bool restart = false;
       auto successful = performFirmwareUpdate(*_pending_firmware);
