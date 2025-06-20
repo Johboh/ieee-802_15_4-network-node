@@ -6,4 +6,4 @@ dependencies:
   johboh/ieee-802_15_4: ">=0.5.4"
   johboh/gcmencryption: ">=0.5.2"
   johboh/ieee-802_15_4-network-shared: ">=0.6.2"
-  johboh/connectionhelper: ">=3.0.11"
+  johboh/connectionhelper: ">=3.0.12"
