@@ -301,8 +301,23 @@ bool Ieee802154NetworkNode::requestData() {
   if (_pending_firmware) {
     if (strlen(_pending_firmware->wifi_ssid) > 0 && strlen(_pending_firmware->wifi_password) > 0 &&
         strlen(_pending_firmware->url) > 0) {
-      // Will never return.
-      return performFirmwareUpdate(*_pending_firmware);
+
+      bool restart = false;
+      auto successful = performFirmwareUpdate(*_pending_firmware);
+
+      if (_on_firmware_update_complete) {
+        restart = _on_firmware_update_complete(successful);
+      } else {
+        restart = successful;
+      }
+
+      if (restart) {
+        ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Restarting...");
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        esp_restart();
+      }
+
+      return successful;
     } else {
       ESP_LOGW(Ieee802154NetworkNodeLog::TAG,
                " -- Got firmware update but with missing fields. Unable to perform firmware update.");
@@ -343,11 +358,8 @@ bool Ieee802154NetworkNode::performFirmwareUpdate(FirmwareUpdate &firmware_updat
     return false;
   }
 
-  // Successful update. Restart.
-  ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Firmware update successful, restarting...");
-  vTaskDelay(1000 / portTICK_PERIOD_MS);
-  esp_restart();
-
+  // Successful update.
+  ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Firmware update successful.");
   return true;
 }
 

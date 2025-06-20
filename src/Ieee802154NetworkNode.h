@@ -5,6 +5,7 @@
 #include <Ieee802154.h>
 #include <OtaHelper.h>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <vector>
@@ -91,6 +92,22 @@ public:
   std::optional<std::vector<uint8_t>> pendingPayload();
 
   /**
+   * return true to restart the device (default behavior), or false to not restart the device. Usually you want to
+   * restart the device upon firmware update complete. Parameter successful indicates if the firmware update was
+   * successful or not.
+   */
+  typedef std::function<bool(bool successful)> OnFirmwareUpdateComplete;
+
+  /**
+   * Set the function to be called upon firmare update completed.
+   * If no callback is set, device will restart on sucessful firmware update, but not on failure.
+   *
+   */
+  void setOnFirmwareUpdated(OnFirmwareUpdateComplete on_firmware_update_complete) {
+    _on_firmware_update_complete = on_firmware_update_complete;
+  }
+
+  /**
    * Forget any previous stored channel and host MAC address.
    */
   void forget();
@@ -131,6 +148,7 @@ private:
   uint64_t _host_address;
   std::mutex _send_mutex;
   bool _nvs_initialized = false;
+  OnFirmwareUpdateComplete _on_firmware_update_complete;
 
   // Pending states
 private:
