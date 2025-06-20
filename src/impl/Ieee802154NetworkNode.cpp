@@ -359,6 +359,7 @@ bool Ieee802154NetworkNode::performFirmwareUpdate(FirmwareUpdate &firmware_updat
   }
 
   // Successful update.
+  _wifi_helper.disconnect();
   ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Firmware update successful.");
   return true;
 }
