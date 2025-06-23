@@ -10,8 +10,12 @@
 #include <nvs_flash.h>
 #include <string>
 
-// Keep track of next sequence number during sleep.
-RTC_FAST_ATTR uint8_t _Ieee802154NetworkNode_next_sequence_number = 0;
+// Keep track of next sequence number during sleep and esp_restart()
+// Using RTC_NOINIT_ATTR will keep the value during both sleep and esp_restart(), but we cannot initalize it.
+// We want to initialize it with a random value, so we not start with 0 on every power on.
+#define SEQUENCE_NUMBER_IS_SET 0x3fbd73e2
+RTC_NOINIT_ATTR uint8_t _Ieee802154NetworkNode_next_sequence_number;
+RTC_NOINIT_ATTR uint32_t _Ieee802154NetworkNode_next_sequence_number_is_set;
 
 Ieee802154NetworkNode::Ieee802154NetworkNode(Configuration configuration)
     : _ota_helper({
@@ -19,13 +23,18 @@ Ieee802154NetworkNode::Ieee802154NetworkNode(Configuration configuration)
           .arduino_ota = {.enabled = false},
           .rollback_strategy = OtaHelper::RollbackStrategy::MANUAL,
       }),
-      _ieee802154({.channel = 0,
-                   .pan_id = configuration.pan_id,
-                   .initial_sequence_number = _Ieee802154NetworkNode_next_sequence_number}),
+      _ieee802154(
+          {.channel = 0,
+           .pan_id = configuration.pan_id,
+           .initial_sequence_number = (_Ieee802154NetworkNode_next_sequence_number_is_set == SEQUENCE_NUMBER_IS_SET
+                                           ? _Ieee802154NetworkNode_next_sequence_number
+                                           : (uint8_t)esp_random())}),
       _nvs_storage("Ieee802154"), _configuration(configuration),
       _gcm_encryption(configuration.gcm_encryption_key, configuration.gcm_encryption_secret, false) {
   esp_log_level_set(OtaHelperLog::TAG, ESP_LOG_ERROR);
   esp_log_level_set(WiFiHelperLog::TAG, ESP_LOG_ERROR);
+  _Ieee802154NetworkNode_next_sequence_number = _ieee802154.nextSequenceNumber();
+  _Ieee802154NetworkNode_next_sequence_number_is_set = SEQUENCE_NUMBER_IS_SET;
 }
 
 bool Ieee802154NetworkNode::sendMessage(std::vector<uint8_t> message) {
