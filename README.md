@@ -48,7 +48,7 @@ dependencies:
 ```
 
 #### Arduino IDE:
-Search for `ieee-802_15_4-network-node` by `johboh` in the library manager.
+Search for `ieee-802_15_4-network-node` by `johboh` in the library manager. Dependent libraries should install automatically, but if not, you also need to install `GCMEncryption`,`ieee-802_15_4`, `ieee-802_15_4-network-shared` and `ConnectionHelper`, all by `johboh`.
 
 #### Espressif IoT Development Framework:
 In your existing `idf_component.yml` or in a new `idf_component.yml` in your `main` folder:
