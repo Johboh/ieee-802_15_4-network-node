@@ -5,6 +5,7 @@
 #include <Ieee802154.h>
 #include <OtaHelper.h>
 #include <cstdint>
+#include <esp_ota_ops.h>
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -131,7 +132,14 @@ private:
   bool sendApplicationMessage(uint8_t *message, uint8_t message_size);
   bool performDiscovery();
   bool requestData();
-  bool performFirmwareUpdate(FirmwareUpdate &firmware_update);
+  bool performFirmwareUpdateViaWifi(FirmwareUpdate &firmware_update);
+
+private: // 802.15.4 OTA support (Instead of via WiFi)
+  bool otaBegin(size_t size);
+  bool otaWrite(uint8_t *data, size_t len);
+  bool otaEnd(std::string &md5);
+  void otaAbort();
+  const esp_partition_t *otaFindPartition();
 
 private:
   static constexpr char NVS_KEY_HOST[] = "host";
@@ -150,9 +158,12 @@ private:
   bool _nvs_initialized = false;
   OnFirmwareUpdateComplete _on_firmware_update_complete;
 
+private: // 802.15.4 OTA support (Instead of via WiFi)
+  esp_ota_handle_t _ota_handle = 0;
+  const esp_partition_t *_update_partition = nullptr;
+
   // Pending states
 private:
   std::optional<uint64_t> _pending_timestamp;
-  std::optional<FirmwareUpdate> _pending_firmware;
   std::optional<std::vector<uint8_t>> _pending_payload;
 };
