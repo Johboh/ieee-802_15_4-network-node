@@ -17,6 +17,9 @@
 RTC_NOINIT_ATTR uint8_t _Ieee802154NetworkNode_next_sequence_number;
 RTC_NOINIT_ATTR uint32_t _Ieee802154NetworkNode_next_sequence_number_is_set;
 
+#define REQUESTED_DATA_MESSAGE_ANY BIT0
+#define REQUESTED_DATA_MESSAGE_FIRMWARE_START BIT1
+
 Ieee802154NetworkNode::Ieee802154NetworkNode(Configuration configuration)
     : _ota_helper({
           .web_ota = {.enabled = false},
@@ -157,7 +160,7 @@ bool Ieee802154NetworkNode::performDiscovery() {
       _nvs_storage.writeToNVS(NVS_KEY_CHANNEL, response->channel);
       _host_address = message.source_address;
       _nvs_storage.writeToNVS(NVS_KEY_HOST, message.source_address);
-      xEventGroupSetBits(event_group, 1);
+      xEventGroupSetBits(event_group, REQUESTED_DATA_MESSAGE_ANY);
       ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got disovery response with channel %d and host 0x%llx",
                response->channel, _host_address);
     } else {
@@ -240,7 +243,7 @@ bool Ieee802154NetworkNode::requestData() {
           reinterpret_cast<Ieee802154NetworkShared::PendingTimestampResponseV1 *>(decrypted.data());
       auto timestamp = response->timestamp;
       _pending_timestamp = timestamp;
-      xEventGroupSetBits(event_group, 1);
+      xEventGroupSetBits(event_group, REQUESTED_DATA_MESSAGE_ANY);
       break;
     }
 
@@ -248,7 +251,7 @@ bool Ieee802154NetworkNode::requestData() {
       ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingPayloadResponseV1");
       _pending_payload = std::vector<uint8_t>(
           decrypted.begin() + sizeof(Ieee802154NetworkShared::PendingPayloadResponseV1), decrypted.end());
-      xEventGroupSetBits(event_group, 1);
+      xEventGroupSetBits(event_group, REQUESTED_DATA_MESSAGE_ANY);
       break;
     }
 
@@ -263,7 +266,7 @@ bool Ieee802154NetworkNode::requestData() {
       strncpy(_pending_firmware->wifi_ssid, response->wifi_ssid, sizeof(_pending_firmware->wifi_ssid));
       strncpy(_pending_firmware->wifi_password, response->wifi_password, sizeof(_pending_firmware->wifi_password));
       firmware_credentials_identifier = response->identifier;
-      xEventGroupSetBits(event_group, 1);
+      xEventGroupSetBits(event_group, REQUESTED_DATA_MESSAGE_ANY);
       break;
     }
 
@@ -277,7 +280,7 @@ bool Ieee802154NetworkNode::requestData() {
       }
       strncpy(_pending_firmware->md5, response->md5, sizeof(_pending_firmware->md5));
       firmware_checksum_identifier = response->identifier;
-      xEventGroupSetBits(event_group, 1);
+      xEventGroupSetBits(event_group, REQUESTED_DATA_MESSAGE_ANY);
       break;
     }
 
@@ -291,7 +294,7 @@ bool Ieee802154NetworkNode::requestData() {
       }
       strncpy(_pending_firmware->url, response->url, sizeof(_pending_firmware->url));
       firmware_url_identifier = response->identifier;
-      xEventGroupSetBits(event_group, 1);
+      xEventGroupSetBits(event_group, REQUESTED_DATA_MESSAGE_ANY);
       break;
     }
 
@@ -302,6 +305,7 @@ bool Ieee802154NetworkNode::requestData() {
           reinterpret_cast<Ieee802154NetworkShared::PendingFirmwareBeginResponseV1 *>(decrypted.data());
       identifier = response->identifier;
       otaBegin(response->size);
+      xEventGroupSetBits(event_group, REQUESTED_DATA_MESSAGE_FIRMWARE_START);
       break;
     }
 
@@ -316,7 +320,7 @@ bool Ieee802154NetworkNode::requestData() {
         ESP_LOGE(Ieee802154NetworkNodeLog::TAG, " -- Identifier mismatch, expected %ld from begin, got %ld", identifier,
                  response->identifier);
       }
-
+      xEventGroupSetBits(event_group, REQUESTED_DATA_MESSAGE_ANY);
       break;
     }
 
@@ -348,7 +352,7 @@ bool Ieee802154NetworkNode::requestData() {
         ESP_LOGE(Ieee802154NetworkNodeLog::TAG, " -- Identifier mismatch, expected %ld from begin, got %ld", identifier,
                  response->identifier);
       }
-
+      xEventGroupSetBits(event_group, REQUESTED_DATA_MESSAGE_ANY);
       break;
     }
 
@@ -359,11 +363,25 @@ bool Ieee802154NetworkNode::requestData() {
   });
 
   // Wait until no more messages has been received within a period.
+  uint8_t missing_messages_counter = 0;
+  bool in_slow_firmware_update_process = false;
   while (1) {
     auto bits = xEventGroupWaitBits(event_group, 1, pdTRUE, pdFALSE, (1000 / portTICK_PERIOD_MS));
-    auto got_message = ((bits & 1) != 0);
-    if (!got_message) {
-      break;
+    auto got_any_message = ((bits & REQUESTED_DATA_MESSAGE_ANY) != 0);
+    auto got_firmware_start_message = ((bits & REQUESTED_DATA_MESSAGE_ANY) != 0);
+    // firmware update via 802.15.4 can be slow as we on host is reading an URL, and that might hang sometimes slightly.
+    // Allow for longer delays if so.
+    if (got_firmware_start_message) {
+      in_slow_firmware_update_process = true;
+    }
+    if (!got_any_message && !got_firmware_start_message) {
+      ++missing_messages_counter;
+      if (!in_slow_firmware_update_process) {
+        break;
+      }
+      if (missing_messages_counter >= 10) {
+        break;
+      }
     }
   }
   ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Data wait complete");
