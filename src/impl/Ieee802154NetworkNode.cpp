@@ -18,7 +18,6 @@ RTC_NOINIT_ATTR uint8_t _Ieee802154NetworkNode_next_sequence_number;
 RTC_NOINIT_ATTR uint32_t _Ieee802154NetworkNode_next_sequence_number_is_set;
 
 #define REQUESTED_DATA_MESSAGE_ANY BIT0
-#define REQUESTED_DATA_MESSAGE_FIRMWARE BIT1
 
 Ieee802154NetworkNode::Ieee802154NetworkNode(Configuration configuration)
     : _ota_helper({
@@ -226,7 +225,6 @@ bool Ieee802154NetworkNode::requestData() {
 
   // We have data. Wait for it.
   ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Data available, waiting");
-  uint32_t identifier = 0;
   uint32_t firmware_url_identifier = 0;
   uint32_t firmware_checksum_identifier = 0;
   uint32_t firmware_credentials_identifier = 0;
@@ -298,80 +296,6 @@ bool Ieee802154NetworkNode::requestData() {
       break;
     }
 
-    // OTA via 802.15.14, slower messages to expect.
-    case Ieee802154NetworkShared::MESSAGE_ID_PENDING_FIRMWARE_RESPONSE_V1: {
-      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingFirmwareResponseV1");
-      Ieee802154NetworkShared::PendingFirmwareResponseV1 *response =
-          reinterpret_cast<Ieee802154NetworkShared::PendingFirmwareResponseV1 *>(decrypted.data());
-      identifier = response->identifier;
-      xEventGroupSetBits(event_group, REQUESTED_DATA_MESSAGE_FIRMWARE);
-      break;
-    }
-
-    // OTA via 802.15.14, Begin
-    case Ieee802154NetworkShared::MESSAGE_ID_PENDING_FIRMWARE_BEGIN_RESPONSE_V1: {
-      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingFirmwareBeginResponseV1");
-      Ieee802154NetworkShared::PendingFirmwareBeginResponseV1 *response =
-          reinterpret_cast<Ieee802154NetworkShared::PendingFirmwareBeginResponseV1 *>(decrypted.data());
-      if (response->identifier == identifier) {
-        otaBegin(response->size);
-      } else {
-        ESP_LOGE(Ieee802154NetworkNodeLog::TAG, " -- Identifier mismatch, expected %ld from begin, got %ld", identifier,
-                 response->identifier);
-      }
-      xEventGroupSetBits(event_group, REQUESTED_DATA_MESSAGE_ANY);
-      break;
-    }
-
-    // OTA via 802.15.14, Data
-    case Ieee802154NetworkShared::MESSAGE_ID_PENDING_FIRMWARE_DATA_RESPONSE_V1: {
-      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingFirmwareDataResponseV1");
-      Ieee802154NetworkShared::PendingFirmwareDataResponseV1 *response =
-          reinterpret_cast<Ieee802154NetworkShared::PendingFirmwareDataResponseV1 *>(decrypted.data());
-      if (response->identifier == identifier) {
-        auto data = std::vector<uint8_t>(
-            decrypted.begin() + sizeof(Ieee802154NetworkShared::PendingFirmwareDataResponseV1), decrypted.end());
-        otaWrite(data);
-      } else {
-        ESP_LOGE(Ieee802154NetworkNodeLog::TAG, " -- Identifier mismatch, expected %ld from begin, got %ld", identifier,
-                 response->identifier);
-      }
-      xEventGroupSetBits(event_group, REQUESTED_DATA_MESSAGE_ANY);
-      break;
-    }
-
-      // OTA via 802.15.14, End
-    case Ieee802154NetworkShared::MESSAGE_ID_PENDING_FIRMWARE_END_RESPONSE_V1: {
-      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingFirmwareEndResponseV1");
-      Ieee802154NetworkShared::PendingFirmwareEndResponseV1 *response =
-          reinterpret_cast<Ieee802154NetworkShared::PendingFirmwareEndResponseV1 *>(decrypted.data());
-
-      if (response->identifier == identifier) {
-
-        std::string md5(response->md5, response->md5 + 32);
-
-        bool restart = false;
-        auto successful = otaEnd(md5);
-
-        if (_on_firmware_update_complete) {
-          restart = _on_firmware_update_complete(successful);
-        } else {
-          restart = successful;
-        }
-
-        if (restart) {
-          ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Restarting...");
-          vTaskDelay(1000 / portTICK_PERIOD_MS);
-          esp_restart();
-        }
-      } else {
-        ESP_LOGE(Ieee802154NetworkNodeLog::TAG, " -- Identifier mismatch, expected %ld from begin, got %ld", identifier,
-                 response->identifier);
-      }
-      xEventGroupSetBits(event_group, REQUESTED_DATA_MESSAGE_ANY);
-      break;
-    }
-
     default:
       ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Got unhandled message %d", message_id);
       break;
@@ -379,30 +303,12 @@ bool Ieee802154NetworkNode::requestData() {
   });
 
   // Wait until no more messages has been received within a period.
-  uint8_t missing_messages_counter = 0;
-  bool in_slow_firmware_update_process = false;
   while (1) {
-    auto bits = xEventGroupWaitBits(event_group, REQUESTED_DATA_MESSAGE_ANY | REQUESTED_DATA_MESSAGE_FIRMWARE, pdTRUE,
-                                    pdFALSE, (1000 / portTICK_PERIOD_MS));
+    auto bits =
+        xEventGroupWaitBits(event_group, REQUESTED_DATA_MESSAGE_ANY, pdTRUE, pdFALSE, (1000 / portTICK_PERIOD_MS));
     auto got_any_message = ((bits & REQUESTED_DATA_MESSAGE_ANY) != 0);
-    auto got_firmware_message = ((bits & REQUESTED_DATA_MESSAGE_FIRMWARE) != 0);
-    // firmware update via 802.15.4 can be slow as we on host is reading an URL, and that might hang sometimes slightly.
-    // Allow for longer delays if so.
-    if (got_firmware_message) {
-      missing_messages_counter = 0;
-      in_slow_firmware_update_process = true;
-    }
-    if (got_any_message) {
-      missing_messages_counter = 0;
-    }
-    if (!got_any_message && !got_firmware_message) {
-      ++missing_messages_counter;
-      if (!in_slow_firmware_update_process) {
-        break;
-      }
-      if (missing_messages_counter >= 15) { // 15 x 1 second
-        break;
-      }
+    if (!got_any_message) {
+      break;
     }
   }
   ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Data wait complete");
@@ -510,95 +416,4 @@ void Ieee802154NetworkNode::initializeNvs() {
     err = nvs_flash_init();
   }
   ESP_ERROR_CHECK(err);
-}
-
-bool Ieee802154NetworkNode::otaBegin(size_t size) {
-  ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "Starting 802.15.4 OTA");
-  if (_ota_handle != 0) {
-    ESP_LOGE(Ieee802154NetworkNodeLog::TAG, "A 802.15.4 OTA update is already in progress.");
-    return false;
-  }
-
-  _update_partition = otaFindPartition();
-  if (_update_partition == nullptr) {
-    ESP_LOGE(Ieee802154NetworkNodeLog::TAG, "Unable to find partition suitable partition");
-    return false;
-  }
-
-  esp_err_t err = esp_ota_begin(_update_partition, size, &_ota_handle);
-  if (err != ESP_OK) {
-    ESP_LOGE(Ieee802154NetworkNodeLog::TAG, "esp_ota_begin failed: %s", esp_err_to_name(err));
-    return false;
-  }
-
-  ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "802.15.4 OTA started with target partition: %s", _update_partition->label);
-  return true;
-}
-
-bool Ieee802154NetworkNode::otaWrite(std::vector<uint8_t> data) {
-  if (_ota_handle == 0) {
-    ESP_LOGE(Ieee802154NetworkNodeLog::TAG, "802.15.4 OTA update has not been started. Call begin() first.");
-    return false;
-  }
-
-  esp_err_t err = esp_ota_write(_ota_handle, (const void *)data.data(), data.size());
-  if (err != ESP_OK) {
-    ESP_LOGE(Ieee802154NetworkNodeLog::TAG, "esp_ota_write failed: %s", esp_err_to_name(err));
-    return false;
-  }
-
-  return true;
-}
-
-bool Ieee802154NetworkNode::otaEnd(std::string &md5) {
-  // TODO(johboh): Verify md5, if needed? There is already a image validator in ota update functions.
-
-  if (_ota_handle == 0) {
-    ESP_LOGE(Ieee802154NetworkNodeLog::TAG, "802.15.4 OTA update has not been started. Call begin() first.");
-    return false;
-  }
-
-  esp_err_t err = esp_ota_end(_ota_handle);
-  _ota_handle = 0; // Reset handle
-  if (err != ESP_OK) {
-    if (err == ESP_ERR_OTA_VALIDATE_FAILED) {
-      ESP_LOGE(Ieee802154NetworkNodeLog::TAG, "Image validation failed, image is corrupted");
-    } else {
-      ESP_LOGE(Ieee802154NetworkNodeLog::TAG, "esp_ota_end failed: %s", esp_err_to_name(err));
-    }
-    return false;
-  }
-
-  err = esp_ota_set_boot_partition(_update_partition);
-  if (err != ESP_OK) {
-    ESP_LOGE(Ieee802154NetworkNodeLog::TAG, "esp_ota_set_boot_partition failed: %s", esp_err_to_name(err));
-    return false;
-  }
-
-  ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "802.15.4 OTA update successful.");
-  return true;
-}
-
-void Ieee802154NetworkNode::otaAbort() {
-  if (_ota_handle == 0) {
-    ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "No 802.15.4 OTA update in progress to abort.");
-    return;
-  }
-
-  ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "Aborting 802.15.4 OTA update.");
-  esp_err_t err = esp_ota_abort(_ota_handle);
-  if (err != ESP_OK) {
-    ESP_LOGE(Ieee802154NetworkNodeLog::TAG, "esp_ota_abort failed: %s", esp_err_to_name(err));
-  }
-
-  _ota_handle = 0;
-  _update_partition = nullptr;
-}
-
-const esp_partition_t *Ieee802154NetworkNode::otaFindPartition() {
-  const esp_partition_t *partition = esp_ota_get_next_update_partition(NULL);
-  if (partition == nullptr) {
-    ESP_LOGE(Ieee802154NetworkNodeLog::TAG, "No firmware OTA partition found");
-  }
-  return partition;
 }
