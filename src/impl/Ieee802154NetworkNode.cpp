@@ -382,7 +382,8 @@ bool Ieee802154NetworkNode::requestData() {
   uint8_t missing_messages_counter = 0;
   bool in_slow_firmware_update_process = false;
   while (1) {
-    auto bits = xEventGroupWaitBits(event_group, 1, pdTRUE, pdFALSE, (1000 / portTICK_PERIOD_MS));
+    auto bits = xEventGroupWaitBits(event_group, REQUESTED_DATA_MESSAGE_ANY | REQUESTED_DATA_MESSAGE_FIRMWARE, pdTRUE,
+                                    pdFALSE, (1000 / portTICK_PERIOD_MS));
     auto got_any_message = ((bits & REQUESTED_DATA_MESSAGE_ANY) != 0);
     auto got_firmware_message = ((bits & REQUESTED_DATA_MESSAGE_FIRMWARE) != 0);
     // firmware update via 802.15.4 can be slow as we on host is reading an URL, and that might hang sometimes slightly.
