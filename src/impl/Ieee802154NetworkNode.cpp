@@ -18,7 +18,7 @@ RTC_NOINIT_ATTR uint8_t _Ieee802154NetworkNode_next_sequence_number;
 RTC_NOINIT_ATTR uint32_t _Ieee802154NetworkNode_next_sequence_number_is_set;
 
 #define REQUESTED_DATA_MESSAGE_ANY BIT0
-#define REQUESTED_DATA_MESSAGE_FIRMWARE_START BIT1
+#define REQUESTED_DATA_MESSAGE_FIRMWARE BIT1
 
 Ieee802154NetworkNode::Ieee802154NetworkNode(Configuration configuration)
     : _ota_helper({
@@ -298,14 +298,28 @@ bool Ieee802154NetworkNode::requestData() {
       break;
     }
 
+    // OTA via 802.15.14, slower messages to expect.
+    case Ieee802154NetworkShared::MESSAGE_ID_PENDING_FIRMWARE_RESPONSE_V1: {
+      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingFirmwareResponseV1");
+      Ieee802154NetworkShared::PendingFirmwareResponseV1 *response =
+          reinterpret_cast<Ieee802154NetworkShared::PendingFirmwareResponseV1 *>(decrypted.data());
+      identifier = response->identifier;
+      xEventGroupSetBits(event_group, REQUESTED_DATA_MESSAGE_FIRMWARE);
+      break;
+    }
+
     // OTA via 802.15.14, Begin
     case Ieee802154NetworkShared::MESSAGE_ID_PENDING_FIRMWARE_BEGIN_RESPONSE_V1: {
       ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingFirmwareBeginResponseV1");
       Ieee802154NetworkShared::PendingFirmwareBeginResponseV1 *response =
           reinterpret_cast<Ieee802154NetworkShared::PendingFirmwareBeginResponseV1 *>(decrypted.data());
-      identifier = response->identifier;
-      otaBegin(response->size);
-      xEventGroupSetBits(event_group, REQUESTED_DATA_MESSAGE_FIRMWARE_START);
+      if (response->identifier == identifier) {
+        otaBegin(response->size);
+      } else {
+        ESP_LOGE(Ieee802154NetworkNodeLog::TAG, " -- Identifier mismatch, expected %ld from begin, got %ld", identifier,
+                 response->identifier);
+      }
+      xEventGroupSetBits(event_group, REQUESTED_DATA_MESSAGE_ANY);
       break;
     }
 
@@ -368,18 +382,22 @@ bool Ieee802154NetworkNode::requestData() {
   while (1) {
     auto bits = xEventGroupWaitBits(event_group, 1, pdTRUE, pdFALSE, (1000 / portTICK_PERIOD_MS));
     auto got_any_message = ((bits & REQUESTED_DATA_MESSAGE_ANY) != 0);
-    auto got_firmware_start_message = ((bits & REQUESTED_DATA_MESSAGE_ANY) != 0);
+    auto got_firmware_message = ((bits & REQUESTED_DATA_MESSAGE_FIRMWARE) != 0);
     // firmware update via 802.15.4 can be slow as we on host is reading an URL, and that might hang sometimes slightly.
     // Allow for longer delays if so.
-    if (got_firmware_start_message) {
+    if (got_firmware_message) {
+      missing_messages_counter = 0;
       in_slow_firmware_update_process = true;
     }
-    if (!got_any_message && !got_firmware_start_message) {
+    if (got_any_message) {
+      missing_messages_counter = 0;
+    }
+    if (!got_any_message && !got_firmware_message) {
       ++missing_messages_counter;
       if (!in_slow_firmware_update_process) {
         break;
       }
-      if (missing_messages_counter >= 10) {
+      if (missing_messages_counter >= 15) { // 15 x 1 second
         break;
       }
     }
