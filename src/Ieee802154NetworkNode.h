@@ -136,7 +136,7 @@ private:
 
 private: // 802.15.4 OTA support (Instead of via WiFi)
   bool otaBegin(size_t size);
-  bool otaWrite(uint8_t *data, size_t len);
+  bool otaWrite(std::vector<uint8_t> data);
   bool otaEnd(std::string &md5);
   void otaAbort();
   const esp_partition_t *otaFindPartition();

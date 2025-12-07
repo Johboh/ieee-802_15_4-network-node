@@ -329,7 +329,9 @@ bool Ieee802154NetworkNode::requestData() {
       Ieee802154NetworkShared::PendingFirmwareDataResponseV1 *response =
           reinterpret_cast<Ieee802154NetworkShared::PendingFirmwareDataResponseV1 *>(decrypted.data());
       if (response->identifier == identifier) {
-        otaWrite(response->payload, 0);
+        auto data = std::vector<uint8_t>(
+            decrypted.begin() + sizeof(Ieee802154NetworkShared::PendingFirmwareDataResponseV1), decrypted.end());
+        otaWrite(data);
       } else {
         ESP_LOGE(Ieee802154NetworkNodeLog::TAG, " -- Identifier mismatch, expected %ld from begin, got %ld", identifier,
                  response->identifier);
@@ -532,13 +534,13 @@ bool Ieee802154NetworkNode::otaBegin(size_t size) {
   return true;
 }
 
-bool Ieee802154NetworkNode::otaWrite(uint8_t *data, size_t len) {
+bool Ieee802154NetworkNode::otaWrite(std::vector<uint8_t> data) {
   if (_ota_handle == 0) {
     ESP_LOGE(Ieee802154NetworkNodeLog::TAG, "802.15.4 OTA update has not been started. Call begin() first.");
     return false;
   }
 
-  esp_err_t err = esp_ota_write(_ota_handle, (const void *)data, len);
+  esp_err_t err = esp_ota_write(_ota_handle, (const void *)data.data(), data.size());
   if (err != ESP_OK) {
     ESP_LOGE(Ieee802154NetworkNodeLog::TAG, "esp_ota_write failed: %s", esp_err_to_name(err));
     return false;
