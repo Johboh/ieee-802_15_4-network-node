@@ -44,7 +44,7 @@ In your existing `idf_component.yml` or in a new `idf_component.yml` in your `sr
 ```
 dependencies:
   johboh/ieee-802_15_4-network-node:
-    version: ">=0.2.0"
+    version: ">=0.2.1"
 ```
 
 #### Arduino IDE:
@@ -55,7 +55,7 @@ In your existing `idf_component.yml` or in a new `idf_component.yml` in your `ma
 ```
 dependencies:
   johboh/ieee-802_15_4-network-node:
-    version: ">=0.2.0"
+    version: ">=0.2.1"
 ```
 
 ### Examples
