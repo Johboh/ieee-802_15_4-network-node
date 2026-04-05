@@ -192,6 +192,7 @@ bool Ieee802154NetworkNode::performDiscovery() {
 
   if (discovered_hosts.empty()) {
     ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Never received any device discovery response");
+    vEventGroupDelete(event_group);
     return false;
   }
 
@@ -217,20 +218,24 @@ bool Ieee802154NetworkNode::performDiscovery() {
   ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Best host found: 0x%llx on channel %d with RSSI %d",
            best_host_it->second.mac_address, best_host_it->second.channel, best_host_it->second.rssi);
 
+  vEventGroupDelete(event_group);
   return true;
 }
 bool Ieee802154NetworkNode::requestData() {
   ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "Requesting data");
 
   auto result = _ieee802154.dataRequest(_host_address);
+  EventGroupHandle_t event_group = xEventGroupCreate();
 
   if (result == Ieee802154::DataRequestResult::Failure) {
     ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Failed to request data");
+    vEventGroupDelete(event_group);
     return false;
   }
 
   if (result == Ieee802154::DataRequestResult::NoDataAvailable) {
     ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- No data available.");
+    vEventGroupDelete(event_group);
     return true;
   }
 
@@ -240,8 +245,6 @@ bool Ieee802154NetworkNode::requestData() {
   uint32_t firmware_checksum_identifier = 0;
   uint32_t firmware_credentials_identifier = 0;
   std::optional<FirmwareUpdate> _pending_firmware;
-
-  EventGroupHandle_t event_group = xEventGroupCreate();
   _ieee802154.receive([&](Ieee802154::Message message) {
     auto decrypted = _gcm_encryption.decrypt(message.payload);
     uint8_t message_id = decrypted.data()[0];
@@ -349,6 +352,7 @@ bool Ieee802154NetworkNode::requestData() {
         esp_restart();
       }
 
+      vEventGroupDelete(event_group);
       return successful;
     } else {
       ESP_LOGW(Ieee802154NetworkNodeLog::TAG,
@@ -356,6 +360,7 @@ bool Ieee802154NetworkNode::requestData() {
     }
   }
 
+  vEventGroupDelete(event_group);
   return true;
 }
 
