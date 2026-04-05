@@ -7,6 +7,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
 #include <freertos/task.h>
+#include <map>
 #include <nvs_flash.h>
 #include <string>
 
@@ -147,66 +148,76 @@ bool Ieee802154NetworkNode::performDiscovery() {
   ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "In device discovery");
 
   Ieee802154NetworkShared::DiscoveryRequestV1 discovery_request;
-
+  std::vector<DiscoveredHost> discovered_hosts;
   EventGroupHandle_t event_group = xEventGroupCreate();
+
   _ieee802154.receive([&](Ieee802154::Message message) {
     auto decrypted = _gcm_encryption.decrypt(message.payload);
     uint8_t message_id = decrypted.data()[0];
     if (message_id == Ieee802154NetworkShared::MESSAGE_ID_DISCOVERY_RESPONSE_V1) {
       Ieee802154NetworkShared::DiscoveryResponseV1 *response =
           reinterpret_cast<Ieee802154NetworkShared::DiscoveryResponseV1 *>(decrypted.data());
-      _ieee802154.setChannel(response->channel);
-      _nvs_storage.writeToNVS(NVS_KEY_CHANNEL, response->channel);
-      _host_address = message.source_address;
-      _nvs_storage.writeToNVS(NVS_KEY_HOST, message.source_address);
+
+      DiscoveredHost host = {
+          .mac_address = message.source_address,
+          .channel = response->channel,
+          .rssi = message.rssi,
+      };
+      discovered_hosts.push_back(host);
       xEventGroupSetBits(event_group, REQUESTED_DATA_MESSAGE_ANY);
-      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got disovery response with channel %d and host 0x%llx",
-               response->channel, _host_address);
+      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got discovery response from 0x%llx on channel %d with RSSI %d",
+               host.mac_address, host.channel, host.rssi);
     } else {
-      ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Got unknown message %d while waiting for device discovery respose",
+      ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Got unknown message %d while waiting for device discovery response",
                message_id);
     }
   });
 
-  // Discover on all channels.
-  // Reduce number of retries.
   auto encrypted = _gcm_encryption.encrypt(&discovery_request, sizeof(Ieee802154NetworkShared::DiscoveryRequestV1));
-  bool found_host = false;
-  // Try each channel one by one a couple of times.
+
+  // Try each channel multiple times to gather all possible hosts.
   for (uint8_t channel = 26; channel >= 11; --channel) {
+    _ieee802154.setChannel(channel);
     for (uint8_t attempt = 1; attempt <= 4; ++attempt) {
-      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Discovering on channel %d, attempt %d...", channel, attempt);
-      _ieee802154.setChannel(channel);
-      // Broadcast never emit ACKs.
+      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Broadcasting discovery on channel %d, attempt %d...", channel,
+               attempt);
       _ieee802154.broadcast(encrypted.data(), encrypted.size());
 
-      // Also check if we got a message that we want.
-      // If we wait to short here, we will switch channel too fast before being able to receive frame.
-      auto bits = xEventGroupWaitBits(event_group, 1, pdFALSE, pdFALSE, (30 / portTICK_PERIOD_MS));
-      found_host = ((bits & 1) != 0);
-      if (found_host) {
-        ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got device response for device request (in loop)");
-        break;
-      }
+      // Wait a short time to collect responses. This clears the event bits after reading.
+      xEventGroupWaitBits(event_group, REQUESTED_DATA_MESSAGE_ANY, pdTRUE, pdFALSE, (30 / portTICK_PERIOD_MS));
     }
-    if (found_host) {
-      break;
-    }
-  }
-
-  // Wait for data with timeout.
-  auto bits = xEventGroupWaitBits(event_group, 1, pdTRUE, pdFALSE, (1000 / portTICK_PERIOD_MS));
-  found_host = ((bits & 1) != 0);
-
-  if (!found_host) {
-    ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Never received device discovery response");
-  } else {
-    ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Host found during device discovery");
   }
 
   _ieee802154.receive({}); // Stop receiving.
 
-  return found_host;
+  if (discovered_hosts.empty()) {
+    ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Never received any device discovery response");
+    return false;
+  }
+
+  // Group responses by MAC address and keep only the best RSSI for each host
+  // This avoids favoring cross-channel responses or measurement anomalies
+  std::map<uint64_t, DiscoveredHost> best_per_host;
+  for (const auto &host : discovered_hosts) {
+    auto it = best_per_host.find(host.mac_address);
+    if (it == best_per_host.end() || host.rssi > it->second.rssi) {
+      best_per_host[host.mac_address] = host;
+    }
+  }
+
+  // Find the overall best host among deduplicated entries
+  auto best_host_it = std::max_element(best_per_host.begin(), best_per_host.end(),
+                                       [](const auto &a, const auto &b) { return a.second.rssi < b.second.rssi; });
+
+  _ieee802154.setChannel(best_host_it->second.channel);
+  _nvs_storage.writeToNVS(NVS_KEY_CHANNEL, best_host_it->second.channel);
+  _host_address = best_host_it->second.mac_address;
+  _nvs_storage.writeToNVS(NVS_KEY_HOST, best_host_it->second.mac_address);
+
+  ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Best host found: 0x%llx on channel %d with RSSI %d",
+           best_host_it->second.mac_address, best_host_it->second.channel, best_host_it->second.rssi);
+
+  return true;
 }
 bool Ieee802154NetworkNode::requestData() {
   ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "Requesting data");

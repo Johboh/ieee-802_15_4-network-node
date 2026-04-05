@@ -133,6 +133,12 @@ private:
   bool requestData();
   bool performFirmwareUpdateViaWifi(FirmwareUpdate &firmware_update);
 
+  struct DiscoveredHost {
+    uint64_t mac_address;
+    uint8_t channel;
+    int8_t rssi;
+  };
+
 private:
   static constexpr char NVS_KEY_HOST[] = "host";
   static constexpr char NVS_KEY_CHANNEL[] = "channel";
