@@ -249,6 +249,14 @@ bool Ieee802154NetworkNode::requestData() {
     auto decrypted = _gcm_encryption.decrypt(message.payload);
     uint8_t message_id = decrypted.data()[0];
     switch (message_id) {
+    case Ieee802154NetworkShared::MESSAGE_ID_FORGET_HOST_RESPONSE_V1: {
+      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got forgetHostResponseV1");
+      forget();
+      performDiscovery(); // Perform discovery directly.
+      xEventGroupSetBits(event_group, REQUESTED_DATA_MESSAGE_ANY);
+      break;
+    }
+
     case Ieee802154NetworkShared::MESSAGE_ID_PENDING_TIMESTAMP_RESPONSE_V1: {
       ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingTimestampResponseV1");
       Ieee802154NetworkShared::PendingTimestampResponseV1 *response =
