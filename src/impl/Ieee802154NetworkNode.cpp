@@ -169,8 +169,15 @@ bool Ieee802154NetworkNode::performDiscovery() {
 
   _ieee802154.receive([&](Ieee802154::Message message) {
     auto decrypted = _gcm_encryption.decrypt(message.payload);
+    if (decrypted.empty()) {
+      return;
+    }
     uint8_t message_id = decrypted.data()[0];
     if (message_id == Ieee802154NetworkShared::MESSAGE_ID_DISCOVERY_RESPONSE_V1) {
+      if (decrypted.size() < sizeof(Ieee802154NetworkShared::DiscoveryResponseV1)) {
+        ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Discovery response packet too small: %d bytes", decrypted.size());
+        return;
+      }
       Ieee802154NetworkShared::DiscoveryResponseV1 *response =
           reinterpret_cast<Ieee802154NetworkShared::DiscoveryResponseV1 *>(decrypted.data());
 
@@ -264,6 +271,9 @@ bool Ieee802154NetworkNode::requestData() {
   bool rediscover_requested = false;
   _ieee802154.receive([&](Ieee802154::Message message) {
     auto decrypted = _gcm_encryption.decrypt(message.payload);
+    if (decrypted.empty()) {
+      return;
+    }
     uint8_t message_id = decrypted.data()[0];
     switch (message_id) {
     case Ieee802154NetworkShared::MESSAGE_ID_FORGET_HOST_RESPONSE_V1: {
@@ -275,6 +285,10 @@ bool Ieee802154NetworkNode::requestData() {
     }
 
     case Ieee802154NetworkShared::MESSAGE_ID_PENDING_TIMESTAMP_RESPONSE_V1: {
+      if (decrypted.size() < sizeof(Ieee802154NetworkShared::PendingTimestampResponseV1)) {
+        ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Timestamp response packet too small: %d bytes", decrypted.size());
+        return;
+      }
       ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingTimestampResponseV1");
       Ieee802154NetworkShared::PendingTimestampResponseV1 *response =
           reinterpret_cast<Ieee802154NetworkShared::PendingTimestampResponseV1 *>(decrypted.data());
@@ -285,6 +299,10 @@ bool Ieee802154NetworkNode::requestData() {
     }
 
     case Ieee802154NetworkShared::MESSAGE_ID_PENDING_PAYLOAD_RESPONSE_V1: {
+      if (decrypted.size() < sizeof(Ieee802154NetworkShared::PendingPayloadResponseV1)) {
+        ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Payload response packet too small: %d bytes", decrypted.size());
+        return;
+      }
       ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingPayloadResponseV1");
       _pending_payload = std::vector<uint8_t>(
           decrypted.begin() + sizeof(Ieee802154NetworkShared::PendingPayloadResponseV1), decrypted.end());
@@ -293,6 +311,11 @@ bool Ieee802154NetworkNode::requestData() {
     }
 
     case Ieee802154NetworkShared::MESSAGE_ID_PENDING_FIRMWARE_WIFI_CREDENTIALS_RESPONSE_V1: {
+      if (decrypted.size() < sizeof(Ieee802154NetworkShared::PendingFirmwareWifiCredentialsResponseV1)) {
+        ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Firmware wifi credentials packet too small: %d bytes",
+                 decrypted.size());
+        return;
+      }
       ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingFirmwareWifiCredentialsResponseV1");
       Ieee802154NetworkShared::PendingFirmwareWifiCredentialsResponseV1 *response =
           reinterpret_cast<Ieee802154NetworkShared::PendingFirmwareWifiCredentialsResponseV1 *>(decrypted.data());
@@ -300,14 +323,20 @@ bool Ieee802154NetworkNode::requestData() {
         FirmwareUpdate empty_firmware_update;
         _pending_firmware = empty_firmware_update;
       }
-      strncpy(_pending_firmware->wifi_ssid, response->wifi_ssid, sizeof(_pending_firmware->wifi_ssid));
-      strncpy(_pending_firmware->wifi_password, response->wifi_password, sizeof(_pending_firmware->wifi_password));
+      memcpy(_pending_firmware->wifi_ssid, response->wifi_ssid, sizeof(response->wifi_ssid));
+      _pending_firmware->wifi_ssid[sizeof(response->wifi_ssid)] = '\0';
+      memcpy(_pending_firmware->wifi_password, response->wifi_password, sizeof(response->wifi_password));
+      _pending_firmware->wifi_password[sizeof(response->wifi_password)] = '\0';
       firmware_credentials_identifier = response->identifier;
       xEventGroupSetBits(event_group, REQUESTED_DATA_MESSAGE_ANY);
       break;
     }
 
     case Ieee802154NetworkShared::MESSAGE_ID_PENDING_FIRMWARE_CHECKSUM_RESPONSE_V1: {
+      if (decrypted.size() < sizeof(Ieee802154NetworkShared::PendingFirmwareChecksumResponseV1)) {
+        ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Firmware checksum packet too small: %d bytes", decrypted.size());
+        return;
+      }
       ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingFirmwareChecksumResponseV1");
       Ieee802154NetworkShared::PendingFirmwareChecksumResponseV1 *response =
           reinterpret_cast<Ieee802154NetworkShared::PendingFirmwareChecksumResponseV1 *>(decrypted.data());
@@ -315,13 +344,18 @@ bool Ieee802154NetworkNode::requestData() {
         FirmwareUpdate empty_firmware_update;
         _pending_firmware = empty_firmware_update;
       }
-      strncpy(_pending_firmware->md5, response->md5, sizeof(_pending_firmware->md5));
+      memcpy(_pending_firmware->md5, response->md5, sizeof(response->md5));
+      _pending_firmware->md5[sizeof(response->md5)] = '\0';
       firmware_checksum_identifier = response->identifier;
       xEventGroupSetBits(event_group, REQUESTED_DATA_MESSAGE_ANY);
       break;
     }
 
     case Ieee802154NetworkShared::MESSAGE_ID_PENDING_FIRMWARE_URL_RESPONSE_V1: {
+      if (decrypted.size() < sizeof(Ieee802154NetworkShared::PendingFirmwareUrlResponseV1)) {
+        ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Firmware url packet too small: %d bytes", decrypted.size());
+        return;
+      }
       ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingFirmwareUrlResponseV1");
       Ieee802154NetworkShared::PendingFirmwareUrlResponseV1 *response =
           reinterpret_cast<Ieee802154NetworkShared::PendingFirmwareUrlResponseV1 *>(decrypted.data());
@@ -329,7 +363,8 @@ bool Ieee802154NetworkNode::requestData() {
         FirmwareUpdate empty_firmware_update;
         _pending_firmware = empty_firmware_update;
       }
-      strncpy(_pending_firmware->url, response->url, sizeof(_pending_firmware->url));
+      memcpy(_pending_firmware->url, response->url, sizeof(response->url));
+      _pending_firmware->url[sizeof(response->url)] = '\0';
       firmware_url_identifier = response->identifier;
       xEventGroupSetBits(event_group, REQUESTED_DATA_MESSAGE_ANY);
       break;
@@ -419,8 +454,8 @@ bool Ieee802154NetworkNode::performFirmwareUpdateViaWifi(FirmwareUpdate &firmwar
 
   // Start OTA.
   auto url = std::string(firmware_update.url);
-  auto md5str = std::string(firmware_update.md5, firmware_update.md5 + 32);
-  ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Starting firmwate update from %s", firmware_update.url);
+  auto md5str = std::string(firmware_update.md5);
+  ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Starting firmware update from %s", firmware_update.url);
   if (!_ota_helper.updateFrom(url, OtaHelper::FlashMode::FIRMWARE, md5str)) {
     ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Failed to download firmware update.");
     _wifi_helper.disconnect();

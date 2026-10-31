@@ -120,10 +120,10 @@ public:
 
 private:
   struct FirmwareUpdate {
-    char wifi_ssid[32] = {0};     // WiFi SSID that node should connect to.
-    char wifi_password[32] = {0}; // WiFi password that the node should connect to.
-    char url[74] = {0};           // url where to find firmware binary.
-    char md5[32] = {0};           // MD5 hash of firmware. Does not include trailing \0
+    char wifi_ssid[33] = {0};     // WiFi SSID that node should connect to. Includes trailing \0
+    char wifi_password[33] = {0}; // WiFi password that the node should connect to. Includes trailing \0
+    char url[75] = {0};           // url where to find firmware binary. Includes trailing \0
+    char md5[33] = {0};           // MD5 hash of firmware. Includes trailing \0
   };
 
   void initializeNvs();
