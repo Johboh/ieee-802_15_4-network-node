@@ -151,7 +151,7 @@ private:
   GCMEncryption _gcm_encryption;
 
 private:
-  uint64_t _host_address;
+  uint64_t _host_address = 0;
   std::mutex _send_mutex;
   bool _nvs_initialized = false;
   OnFirmwareUpdateComplete _on_firmware_update_complete;

@@ -31,7 +31,8 @@ Ieee802154NetworkNode::Ieee802154NetworkNode(Configuration configuration)
            .pan_id = configuration.pan_id,
            .initial_sequence_number = (_Ieee802154NetworkNode_next_sequence_number_is_set == SEQUENCE_NUMBER_IS_SET
                                            ? _Ieee802154NetworkNode_next_sequence_number
-                                           : (uint8_t)esp_random())}),
+                                           : (uint8_t)esp_random()),
+           .tx_power = configuration.tx_power}),
       _nvs_storage("Ieee802154"), _configuration(configuration),
       _gcm_encryption(configuration.gcm_encryption_key, configuration.gcm_encryption_secret, false) {
   esp_log_level_set(OtaHelperLog::TAG, ESP_LOG_ERROR);
@@ -483,7 +484,7 @@ uint64_t Ieee802154NetworkNode::deviceMacAddress() const { return _ieee802154.de
 void Ieee802154NetworkNode::teardown() {
   // Store in RTC memory
   _Ieee802154NetworkNode_next_sequence_number = _ieee802154.nextSequenceNumber();
-  return _ieee802154.teardown();
+  _ieee802154.teardown();
 }
 
 void Ieee802154NetworkNode::forget() {
