@@ -261,6 +261,7 @@ bool Ieee802154NetworkNode::requestData() {
   uint32_t firmware_checksum_identifier = 0;
   uint32_t firmware_credentials_identifier = 0;
   std::optional<FirmwareUpdate> _pending_firmware;
+  bool rediscover_requested = false;
   _ieee802154.receive([&](Ieee802154::Message message) {
     auto decrypted = _gcm_encryption.decrypt(message.payload);
     uint8_t message_id = decrypted.data()[0];
@@ -268,7 +269,7 @@ bool Ieee802154NetworkNode::requestData() {
     case Ieee802154NetworkShared::MESSAGE_ID_FORGET_HOST_RESPONSE_V1: {
       ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got forgetHostResponseV1");
       forget();
-      performDiscovery(); // Perform discovery directly.
+      rediscover_requested = true;
       xEventGroupSetBits(event_group, REQUESTED_DATA_MESSAGE_ANY);
       break;
     }
@@ -345,13 +346,20 @@ bool Ieee802154NetworkNode::requestData() {
     auto bits =
         xEventGroupWaitBits(event_group, REQUESTED_DATA_MESSAGE_ANY, pdTRUE, pdFALSE, (1000 / portTICK_PERIOD_MS));
     auto got_any_message = ((bits & REQUESTED_DATA_MESSAGE_ANY) != 0);
-    if (!got_any_message) {
+    if (!got_any_message || rediscover_requested) {
       break;
     }
   }
   ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Data wait complete");
 
   _ieee802154.receive({}); // Stop receiving.
+
+  if (rediscover_requested) {
+    ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Performing discovery after forget host request");
+    bool discovery_ok = performDiscovery();
+    vEventGroupDelete(event_group);
+    return discovery_ok;
+  }
 
   // If we now have a complete firmware update, lets go and update the firmware.
   if (_pending_firmware) {
