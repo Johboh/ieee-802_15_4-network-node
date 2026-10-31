@@ -40,11 +40,11 @@ Ieee802154NetworkNode::Ieee802154NetworkNode(Configuration configuration)
   _Ieee802154NetworkNode_next_sequence_number_is_set = SEQUENCE_NUMBER_IS_SET;
 }
 
-bool Ieee802154NetworkNode::sendMessage(std::vector<uint8_t> message) {
+bool Ieee802154NetworkNode::sendMessage(const std::vector<uint8_t> &message) {
   return sendMessage(message.data(), message.size());
 }
 
-bool Ieee802154NetworkNode::sendMessage(uint8_t *message, uint8_t message_size) {
+bool Ieee802154NetworkNode::sendMessage(const uint8_t *message, uint8_t message_size) {
   std::scoped_lock lock(_send_mutex);
 
   if (!_nvs_initialized) {
@@ -54,7 +54,10 @@ bool Ieee802154NetworkNode::sendMessage(uint8_t *message, uint8_t message_size) 
   }
 
   bool initialize_nvs = false;
-  _ieee802154.initialize(initialize_nvs);
+  if (!_ieee802154.initialize(initialize_nvs)) {
+    ESP_LOGE(Ieee802154NetworkNodeLog::TAG, "Failed to initialize 802.15.4 radio");
+    return false;
+  }
 
   // Read channel and host address from NVS.
   uint8_t channel = 0;
@@ -81,39 +84,43 @@ bool Ieee802154NetworkNode::sendMessage(uint8_t *message, uint8_t message_size) 
 
   // Try sending application message once.
   ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "First attempt of sending message...");
-  auto r = sendApplicationMessage(message, message_size);
-  if (r) {
+  auto tx_result = sendApplicationMessage(message, message_size);
+  if (tx_result == Ieee802154::TransmitResult::Success || tx_result == Ieee802154::TransmitResult::SuccessWithPending) {
     ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "First attempt of sending message OK");
-
-    r = requestData();
-    if (!r) {
-      ESP_LOGW(Ieee802154NetworkNodeLog::TAG, "Data request failed");
+    bool req_ok = true;
+    if (tx_result == Ieee802154::TransmitResult::SuccessWithPending) {
+      req_ok = requestData();
+      if (!req_ok) {
+        ESP_LOGW(Ieee802154NetworkNodeLog::TAG, "Data request failed");
+      }
     }
     teardown();
-    return r;
+    return req_ok;
   } else {
     // Not good. Wait and try again.
     ESP_LOGW(Ieee802154NetworkNodeLog::TAG, "First attempt of sending message failed");
     vTaskDelay(1000 / portTICK_PERIOD_MS);
     ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "Second attempt of sending message...");
-    r = sendApplicationMessage(message, message_size);
+    tx_result = sendApplicationMessage(message, message_size);
   }
 
-  if (r) {
+  if (tx_result == Ieee802154::TransmitResult::Success || tx_result == Ieee802154::TransmitResult::SuccessWithPending) {
     ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "Second attempt of sending message OK");
-
-    r = requestData();
-    if (!r) {
-      ESP_LOGW(Ieee802154NetworkNodeLog::TAG, "Data request failed");
+    bool req_ok = true;
+    if (tx_result == Ieee802154::TransmitResult::SuccessWithPending) {
+      req_ok = requestData();
+      if (!req_ok) {
+        ESP_LOGW(Ieee802154NetworkNodeLog::TAG, "Data request failed");
+      }
     }
     teardown();
-    return r;
+    return req_ok;
   } else {
     ESP_LOGW(Ieee802154NetworkNodeLog::TAG, "Second attempt of sending message failed");
 
     // Not good. Assume faulty host or channel.
     // Go into discovery mode.
-    r = performDiscovery();
+    auto r = performDiscovery();
     if (!r) {
       ESP_LOGW(Ieee802154NetworkNodeLog::TAG, "Device discovery failed");
       teardown();
@@ -121,16 +128,25 @@ bool Ieee802154NetworkNode::sendMessage(uint8_t *message, uint8_t message_size) 
     } else {
       // Discovery OK, try sending message.
       ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "Third attempt of sending message (after discovery)...");
-      r = sendApplicationMessage(message, message_size);
+      tx_result = sendApplicationMessage(message, message_size);
     }
   }
 
-  ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "End of sendMessage: %d", r);
+  bool success =
+      (tx_result == Ieee802154::TransmitResult::Success || tx_result == Ieee802154::TransmitResult::SuccessWithPending);
+  if (success && tx_result == Ieee802154::TransmitResult::SuccessWithPending) {
+    if (!requestData()) {
+      ESP_LOGW(Ieee802154NetworkNodeLog::TAG, "Data request failed");
+      success = false;
+    }
+  }
+
+  ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "End of sendMessage: %d", success);
   teardown();
-  return r;
+  return success;
 }
 
-bool Ieee802154NetworkNode::sendApplicationMessage(uint8_t *message, uint8_t message_size) {
+Ieee802154::TransmitResult Ieee802154NetworkNode::sendApplicationMessage(const uint8_t *message, uint8_t message_size) {
   auto wire_message_size = sizeof(Ieee802154NetworkShared::MessageV1) + message_size;
   std::unique_ptr<uint8_t[]> buffer(new (std::nothrow) uint8_t[wire_message_size]);
   Ieee802154NetworkShared::MessageV1 *wire_message =
@@ -420,7 +436,7 @@ std::optional<std::vector<uint8_t>> Ieee802154NetworkNode::pendingPayload() {
   return pending;
 }
 
-uint64_t Ieee802154NetworkNode::deviceMacAddress() { return _ieee802154.deviceMacAddress(); }
+uint64_t Ieee802154NetworkNode::deviceMacAddress() const { return _ieee802154.deviceMacAddress(); }
 
 void Ieee802154NetworkNode::teardown() {
   // Store in RTC memory

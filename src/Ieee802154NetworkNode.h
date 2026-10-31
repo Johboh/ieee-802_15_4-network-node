@@ -68,7 +68,7 @@ public:
    * @param message the message to send. Maximum message size is 74 bytes.
    * @return true if message was delivered successfully.
    */
-  bool sendMessage(std::vector<uint8_t> message);
+  bool sendMessage(const std::vector<uint8_t> &message);
   /**
    * Send a message to the host.
    * If no host can be found or there is channel mismatch, will go into discovery mode and try to find the host.
@@ -80,7 +80,7 @@ public:
    * @param message_size maxium message size is 74 bytes.
    * @return true if message was delivered successfully.
    */
-  bool sendMessage(uint8_t *message, uint8_t message_size);
+  bool sendMessage(const uint8_t *message, uint8_t message_size);
 
   /**
    * If set, get the pending timestamp. Will clear any pending timestamp upon access.
@@ -116,7 +116,7 @@ public:
    * @brief Get the device mac address for this device. This would be the source address in the 802.15.4 frame (or the
    * destination address for a sender).
    */
-  uint64_t deviceMacAddress();
+  uint64_t deviceMacAddress() const;
 
 private:
   struct FirmwareUpdate {
@@ -128,7 +128,7 @@ private:
 
   void initializeNvs();
   void teardown();
-  bool sendApplicationMessage(uint8_t *message, uint8_t message_size);
+  Ieee802154::TransmitResult sendApplicationMessage(const uint8_t *message, uint8_t message_size);
   bool performDiscovery();
   bool requestData();
   bool performFirmwareUpdateViaWifi(FirmwareUpdate &firmware_update);
