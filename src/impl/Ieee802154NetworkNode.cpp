@@ -46,6 +46,15 @@ bool Ieee802154NetworkNode::sendMessage(const std::vector<uint8_t> &message) {
 }
 
 bool Ieee802154NetworkNode::sendMessage(const uint8_t *message, uint8_t message_size) {
+  if (message == nullptr && message_size > 0) {
+    ESP_LOGE(Ieee802154NetworkNodeLog::TAG, "Message is null but message_size > 0");
+    return false;
+  }
+  if (message_size > 74) {
+    ESP_LOGE(Ieee802154NetworkNodeLog::TAG, "Message size %d exceeds maximum allowed size of 74 bytes", message_size);
+    return false;
+  }
+
   std::scoped_lock lock(_send_mutex);
 
   if (!_nvs_initialized) {
@@ -150,11 +159,17 @@ bool Ieee802154NetworkNode::sendMessage(const uint8_t *message, uint8_t message_
 Ieee802154::TransmitResult Ieee802154NetworkNode::sendApplicationMessage(const uint8_t *message, uint8_t message_size) {
   auto wire_message_size = sizeof(Ieee802154NetworkShared::MessageV1) + message_size;
   std::unique_ptr<uint8_t[]> buffer(new (std::nothrow) uint8_t[wire_message_size]);
+  if (!buffer) {
+    ESP_LOGE(Ieee802154NetworkNodeLog::TAG, "Failed to allocate memory for application message");
+    return Ieee802154::TransmitResult::Failure;
+  }
   Ieee802154NetworkShared::MessageV1 *wire_message =
       reinterpret_cast<Ieee802154NetworkShared::MessageV1 *>(buffer.get());
   wire_message->id = Ieee802154NetworkShared::MESSAGE_ID_MESSAGE;
   wire_message->firmware_version = _configuration.firmware_version;
-  memcpy(wire_message->payload, message, message_size);
+  if (message != nullptr && message_size > 0) {
+    memcpy(wire_message->payload, message, message_size);
+  }
 
   auto encrypted = _gcm_encryption.encrypt(wire_message, wire_message_size);
 
