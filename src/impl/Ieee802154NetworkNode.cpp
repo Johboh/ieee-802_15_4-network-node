@@ -439,8 +439,7 @@ bool Ieee802154NetworkNode::performFirmwareUpdateViaWifi(FirmwareUpdate &firmwar
   ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- URL: %s", firmware_update.url);
 
   char hostname[32]; // Max allowed is 32
-  sprintf(hostname, "ieee802154node_%llx", _host_address);
-  std::string hostname_str(hostname);
+  snprintf(hostname, sizeof(hostname), "ieee802154node_%llx", deviceMacAddress());
   WiFiHelper _wifi_helper(hostname);
 
   // Turn of 802.15.4
