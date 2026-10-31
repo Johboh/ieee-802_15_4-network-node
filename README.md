@@ -27,10 +27,10 @@ sequenceDiagram
     Note right of Node: Zzz...
 
     Node->>Host: Application Message
-    Host-->>Node: ACK
-    Node->>Host: Data Request
-    Host-->>Node: Data Available/No Data Available
-    alt Data Available
+    Host-->>Node: ACK (with pending flag)
+    alt Pending data waiting on host
+        Node->>Host: Data Request
+        Host-->>Node: ACK (Data Available)
         Note right of Node: Waits for data...
         Host->>Node: Timestamp, Payload, or Firmware Package
         Note right of Node: Sets payload to application and/or performs firmware update
@@ -48,7 +48,7 @@ dependencies:
 ```
 
 #### Arduino IDE:
-Search for `ieee-802_15_4-network-node` by `johboh` in the library manager. Dependent libraries should install automatically, but if not, you also need to install `GCMEncryption`,`ieee-802_15_4`, `ieee-802_15_4-network-shared` and `ConnectionHelper`, all by `johboh`.
+Search for `ieee-802_15_4-network-node` by `johboh` in the library manager. Dependent libraries should install automatically, but if not, you also need to install `GCMEncryption`, `ieee-802_15_4`, `ieee-802_15_4-network-shared` and `ConnectionHelper`, all by `johboh`.
 
 #### Espressif IoT Development Framework:
 In your existing `idf_component.yml` or in a new `idf_component.yml` in your `main` folder:
