@@ -34,20 +34,23 @@ public:
   template <typename T> bool writeToNVS(const char *key, const T &value) {
     nvs_handle_t my_handle;
     esp_err_t err = nvs_open(_namespace_name.c_str(), NVS_READWRITE, &my_handle);
-    if (err == ESP_OK) {
-      err = nvs_set_blob(my_handle, key, &value, sizeof(T));
-      if (err == ESP_OK) {
-        err = nvs_commit(my_handle);
-        nvs_close(my_handle);
-        if (err == ESP_OK) {
-          return true;
-        }
-      }
-      ESP_LOGE(NvsStorageLog::TAG, "Error %s committing to NVS.", esp_err_to_name(err));
-    } else {
+    if (err != ESP_OK) {
       ESP_LOGE(NvsStorageLog::TAG, "Error %s when opening NVS.", esp_err_to_name(err));
+      return false;
     }
-    return false;
+
+    err = nvs_set_blob(my_handle, key, &value, sizeof(T));
+    if (err == ESP_OK) {
+      err = nvs_commit(my_handle);
+      if (err != ESP_OK) {
+        ESP_LOGE(NvsStorageLog::TAG, "Error %s committing to NVS.", esp_err_to_name(err));
+      }
+    } else {
+      ESP_LOGE(NvsStorageLog::TAG, "Error %s setting blob in NVS.", esp_err_to_name(err));
+    }
+
+    nvs_close(my_handle);
+    return err == ESP_OK;
   }
 
   bool eraseKey(const char *key);
