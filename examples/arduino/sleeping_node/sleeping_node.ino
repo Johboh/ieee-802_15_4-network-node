@@ -16,8 +16,6 @@ struct __attribute__((packed)) ApplicationMessage {
   double temperature;
 };
 
-char buffer[64];
-
 Ieee802154NetworkNode _ieee802154_node({
     .gcm_encryption_key = gcm_encryption_key,
     .gcm_encryption_secret = gcm_encryption_secret,
@@ -26,13 +24,16 @@ Ieee802154NetworkNode _ieee802154_node({
 });
 
 void setup() {
+  Serial.begin(115200);
+
+  char buffer[64];
   sprintf(buffer, "This device IEEE802.15.4 MAC: 0x%llx", _ieee802154_node.deviceMacAddress());
   Serial.println(buffer);
 
   ApplicationMessage message = {
       .temperature = 25.2,
   };
-  _ieee802154_node.sendMessage((uint8_t *)&message, sizeof(ApplicationMessage));
+  _ieee802154_node.sendMessage((const uint8_t *)&message, sizeof(ApplicationMessage));
 
   esp_sleep_enable_timer_wakeup(SLEEP_TIME_US);
   esp_sleep_config_gpio_isolate();
