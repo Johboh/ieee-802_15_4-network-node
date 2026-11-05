@@ -1,3 +1,6 @@
+// Copyright (c) Johan Böhlin
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "NvsStorage.h"
 
 NvsStorage::NvsStorage(std::string namespace_name) : _namespace_name(namespace_name) {}
