@@ -44,7 +44,20 @@ void app_main(void) {
   ApplicationMessage message = {
       .temperature = 25.2,
   };
-  _ieee802154_node.sendMessage((const uint8_t *)&message, sizeof(ApplicationMessage));
+  auto result = _ieee802154_node.sendMessage((const uint8_t *)&message, sizeof(ApplicationMessage));
+  if (result) {
+    ESP_LOGI(LOG_TAG, "Message sent successfully (attempts: %u, ACK RSSI: %d, LQI: %u)", result.attempts,
+             result.ack_rssi, result.ack_lqi);
+    if (result.timestamp) {
+      ESP_LOGI(LOG_TAG, " -- Received timestamp: %llu", *result.timestamp);
+    }
+    if (result.payload) {
+      ESP_LOGI(LOG_TAG, " -- Received payload (%u bytes)", (unsigned int)result.payload->size());
+    }
+  } else {
+    ESP_LOGE(LOG_TAG, "Failed to send message (attempts: %u, errors: %u, last_error: %d)", result.attempts,
+             result.errors, result.last_error);
+  }
 
   esp_sleep_enable_timer_wakeup(SLEEP_TIME_US);
   esp_sleep_config_gpio_isolate();

@@ -44,18 +44,19 @@ Ieee802154NetworkNode::Ieee802154NetworkNode(Configuration configuration)
   _Ieee802154NetworkNode_next_sequence_number_is_set = SEQUENCE_NUMBER_IS_SET;
 }
 
-bool Ieee802154NetworkNode::sendMessage(const std::vector<uint8_t> &message) {
+Ieee802154NetworkNode::SendMessageResult Ieee802154NetworkNode::sendMessage(const std::vector<uint8_t> &message) {
   return sendMessage(message.data(), message.size());
 }
 
-bool Ieee802154NetworkNode::sendMessage(const uint8_t *message, uint8_t message_size) {
+Ieee802154NetworkNode::SendMessageResult Ieee802154NetworkNode::sendMessage(const uint8_t *message,
+                                                                            uint8_t message_size) {
   if (message == nullptr && message_size > 0) {
     ESP_LOGE(Ieee802154NetworkNodeLog::TAG, "Message is null but message_size > 0");
-    return false;
+    return SendMessageResult::Failure;
   }
   if (message_size > 74) {
     ESP_LOGE(Ieee802154NetworkNodeLog::TAG, "Message size %d exceeds maximum allowed size of 74 bytes", message_size);
-    return false;
+    return SendMessageResult::Failure;
   }
 
   std::scoped_lock lock(_send_mutex);
@@ -69,14 +70,15 @@ bool Ieee802154NetworkNode::sendMessage(const uint8_t *message, uint8_t message_
   bool initialize_nvs = false;
   if (!_ieee802154.initialize(initialize_nvs)) {
     ESP_LOGE(Ieee802154NetworkNodeLog::TAG, "Failed to initialize 802.15.4 radio");
-    return false;
+    return SendMessageResult::Failure;
   }
 
   // Read channel and host address from NVS.
   uint8_t channel = 0;
   bool read_ok = _nvs_storage.readFromNVS(NVS_KEY_CHANNEL, channel);
   if (read_ok) {
-    _ieee802154.setChannel(channel);
+    _channel = channel;
+    _ieee802154.setChannel(_channel);
     read_ok = _nvs_storage.readFromNVS(NVS_KEY_HOST, _host_address);
   }
   if (read_ok) {
@@ -91,45 +93,57 @@ bool Ieee802154NetworkNode::sendMessage(const uint8_t *message, uint8_t message_
     if (!r) {
       ESP_LOGW(Ieee802154NetworkNodeLog::TAG, "Device discovery failed");
       teardown();
-      return r;
+      return SendMessageResult::Failure;
     }
   }
+
+  std::optional<uint64_t> pending_timestamp;
+  std::optional<std::vector<uint8_t>> pending_payload;
 
   // Try sending application message once.
   ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "First attempt of sending message...");
   auto tx_result = sendApplicationMessage(message, message_size);
   if (tx_result == Ieee802154::TransmitResult::Success || tx_result == Ieee802154::TransmitResult::SuccessWithPending) {
-    ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "First attempt of sending message OK");
+    ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "First attempt of sending message OK (attempts: %u, ACK RSSI: %d, LQI: %u)",
+             tx_result.attempts, tx_result.ack_rssi, tx_result.ack_lqi);
     bool req_ok = true;
     if (tx_result == Ieee802154::TransmitResult::SuccessWithPending) {
-      req_ok = requestData();
+      req_ok = requestData(pending_timestamp, pending_payload);
       if (!req_ok) {
         ESP_LOGW(Ieee802154NetworkNodeLog::TAG, "Data request failed");
       }
     }
     teardown();
-    return req_ok;
+    return SendMessageResult(req_ok ? SendMessageResult::Success : SendMessageResult::Failure, tx_result,
+                             pending_timestamp, std::move(pending_payload));
   } else {
     // Not good. Wait and try again.
-    ESP_LOGW(Ieee802154NetworkNodeLog::TAG, "First attempt of sending message failed");
+    ESP_LOGW(Ieee802154NetworkNodeLog::TAG,
+             "First attempt of sending message failed (attempts: %u, errors: %u, last_error: %d)", tx_result.attempts,
+             tx_result.errors, tx_result.last_error);
     vTaskDelay(1000 / portTICK_PERIOD_MS);
     ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "Second attempt of sending message...");
     tx_result = sendApplicationMessage(message, message_size);
   }
 
   if (tx_result == Ieee802154::TransmitResult::Success || tx_result == Ieee802154::TransmitResult::SuccessWithPending) {
-    ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "Second attempt of sending message OK");
+    ESP_LOGI(Ieee802154NetworkNodeLog::TAG,
+             "Second attempt of sending message OK (attempts: %u, ACK RSSI: %d, LQI: %u)", tx_result.attempts,
+             tx_result.ack_rssi, tx_result.ack_lqi);
     bool req_ok = true;
     if (tx_result == Ieee802154::TransmitResult::SuccessWithPending) {
-      req_ok = requestData();
+      req_ok = requestData(pending_timestamp, pending_payload);
       if (!req_ok) {
         ESP_LOGW(Ieee802154NetworkNodeLog::TAG, "Data request failed");
       }
     }
     teardown();
-    return req_ok;
+    return SendMessageResult(req_ok ? SendMessageResult::Success : SendMessageResult::Failure, tx_result,
+                             pending_timestamp, std::move(pending_payload));
   } else {
-    ESP_LOGW(Ieee802154NetworkNodeLog::TAG, "Second attempt of sending message failed");
+    ESP_LOGW(Ieee802154NetworkNodeLog::TAG,
+             "Second attempt of sending message failed (attempts: %u, errors: %u, last_error: %d)", tx_result.attempts,
+             tx_result.errors, tx_result.last_error);
 
     // Not good. Assume faulty host or channel.
     // Go into discovery mode.
@@ -137,7 +151,7 @@ bool Ieee802154NetworkNode::sendMessage(const uint8_t *message, uint8_t message_
     if (!r) {
       ESP_LOGW(Ieee802154NetworkNodeLog::TAG, "Device discovery failed");
       teardown();
-      return r;
+      return SendMessageResult(SendMessageResult::Failure, tx_result, pending_timestamp, std::move(pending_payload));
     } else {
       // Discovery OK, try sending message.
       ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "Third attempt of sending message (after discovery)...");
@@ -147,8 +161,16 @@ bool Ieee802154NetworkNode::sendMessage(const uint8_t *message, uint8_t message_
 
   bool success =
       (tx_result == Ieee802154::TransmitResult::Success || tx_result == Ieee802154::TransmitResult::SuccessWithPending);
+  if (success) {
+    ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "Third attempt of sending message OK (attempts: %u, ACK RSSI: %d, LQI: %u)",
+             tx_result.attempts, tx_result.ack_rssi, tx_result.ack_lqi);
+  } else {
+    ESP_LOGW(Ieee802154NetworkNodeLog::TAG,
+             "Third attempt of sending message failed (attempts: %u, errors: %u, last_error: %d)", tx_result.attempts,
+             tx_result.errors, tx_result.last_error);
+  }
   if (success && tx_result == Ieee802154::TransmitResult::SuccessWithPending) {
-    if (!requestData()) {
+    if (!requestData(pending_timestamp, pending_payload)) {
       ESP_LOGW(Ieee802154NetworkNodeLog::TAG, "Data request failed");
       success = false;
     }
@@ -156,7 +178,8 @@ bool Ieee802154NetworkNode::sendMessage(const uint8_t *message, uint8_t message_
 
   ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "End of sendMessage: %d", success);
   teardown();
-  return success;
+  return SendMessageResult(success ? SendMessageResult::Success : SendMessageResult::Failure, tx_result,
+                           pending_timestamp, std::move(pending_payload));
 }
 
 Ieee802154::TransmitResult Ieee802154NetworkNode::sendApplicationMessage(const uint8_t *message, uint8_t message_size) {
@@ -176,7 +199,7 @@ Ieee802154::TransmitResult Ieee802154NetworkNode::sendApplicationMessage(const u
 
   auto encrypted = _gcm_encryption.encrypt(wire_message, wire_message_size);
 
-  return _ieee802154.transmit(_host_address, encrypted.data(), encrypted.size());
+  return _ieee802154.transmit(_host_address, encrypted.data(), encrypted.size(), _configuration.data_frame_retries);
 }
 
 bool Ieee802154NetworkNode::performDiscovery() {
@@ -204,11 +227,13 @@ bool Ieee802154NetworkNode::performDiscovery() {
           .mac_address = message.source_address,
           .channel = response->channel,
           .rssi = message.rssi,
+          .lqi = message.lqi,
       };
       discovered_hosts.push_back(host);
       xEventGroupSetBits(event_group, REQUESTED_DATA_MESSAGE_ANY);
-      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got discovery response from 0x%llx on channel %d with RSSI %d",
-               host.mac_address, host.channel, host.rssi);
+      ESP_LOGI(Ieee802154NetworkNodeLog::TAG,
+               " -- Got discovery response from 0x%llx on channel %d with RSSI %d, LQI %u", host.mac_address,
+               host.channel, host.rssi, host.lqi);
     } else {
       ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Got unknown message %d while waiting for device discovery response",
                message_id);
@@ -223,7 +248,13 @@ bool Ieee802154NetworkNode::performDiscovery() {
     for (uint8_t attempt = 1; attempt <= 4; ++attempt) {
       ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Broadcasting discovery on channel %d, attempt %d...", channel,
                attempt);
-      _ieee802154.broadcast(encrypted.data(), encrypted.size());
+      auto bcast_result =
+          _ieee802154.broadcast(encrypted.data(), encrypted.size(), _configuration.discovery_broadcast_retries);
+      if (!bcast_result) {
+        ESP_LOGW(Ieee802154NetworkNodeLog::TAG,
+                 " -- Broadcast failed on channel %d (attempts: %u, errors: %u, last_error: %d)", channel,
+                 bcast_result.attempts, bcast_result.errors, bcast_result.last_error);
+      }
 
       // Wait a short time to collect responses. This clears the event bits after reading.
       xEventGroupWaitBits(event_group, REQUESTED_DATA_MESSAGE_ANY, pdTRUE, pdFALSE, (30 / portTICK_PERIOD_MS));
@@ -238,51 +269,64 @@ bool Ieee802154NetworkNode::performDiscovery() {
     return false;
   }
 
-  // Group responses by MAC address and keep only the best RSSI for each host
-  // This avoids favoring cross-channel responses or measurement anomalies
+  // Group responses by MAC address and keep only the best response for each host.
+  // Prioritize LQI (link quality / packet error rate) as the primary metric,
+  // using RSSI as a tie-breaker when LQI values are equal (e.g. saturated at 255).
+  // This avoids favoring cross-channel responses or noisy high-interference channels.
   std::map<uint64_t, DiscoveredHost> best_per_host;
   for (const auto &host : discovered_hosts) {
     auto it = best_per_host.find(host.mac_address);
-    if (it == best_per_host.end() || host.rssi > it->second.rssi) {
+    if (it == best_per_host.end() || host.lqi > it->second.lqi ||
+        (host.lqi == it->second.lqi && host.rssi > it->second.rssi)) {
       best_per_host[host.mac_address] = host;
     }
   }
 
-  // Find the overall best host among deduplicated entries
-  auto best_host_it = std::max_element(best_per_host.begin(), best_per_host.end(),
-                                       [](const auto &a, const auto &b) { return a.second.rssi < b.second.rssi; });
+  // Find the overall best host among deduplicated entries (prioritizing LQI, then RSSI)
+  auto best_host_it = std::max_element(best_per_host.begin(), best_per_host.end(), [](const auto &a, const auto &b) {
+    if (a.second.lqi != b.second.lqi) {
+      return a.second.lqi < b.second.lqi;
+    }
+    return a.second.rssi < b.second.rssi;
+  });
 
-  _ieee802154.setChannel(best_host_it->second.channel);
-  _nvs_storage.writeToNVS(NVS_KEY_CHANNEL, best_host_it->second.channel);
+  _channel = best_host_it->second.channel;
+  _ieee802154.setChannel(_channel);
+  _nvs_storage.writeToNVS(NVS_KEY_CHANNEL, _channel);
   _host_address = best_host_it->second.mac_address;
   _nvs_storage.writeToNVS(NVS_KEY_HOST, best_host_it->second.mac_address);
 
-  ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Best host found: 0x%llx on channel %d with RSSI %d",
-           best_host_it->second.mac_address, best_host_it->second.channel, best_host_it->second.rssi);
+  ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Best host found: 0x%llx on channel %d with RSSI %d, LQI %u",
+           best_host_it->second.mac_address, best_host_it->second.channel, best_host_it->second.rssi,
+           best_host_it->second.lqi);
 
   vEventGroupDelete(event_group);
   return true;
 }
-bool Ieee802154NetworkNode::requestData() {
+bool Ieee802154NetworkNode::requestData(std::optional<uint64_t> &pending_timestamp,
+                                        std::optional<std::vector<uint8_t>> &pending_payload) {
   ESP_LOGI(Ieee802154NetworkNodeLog::TAG, "Requesting data");
 
-  auto result = _ieee802154.dataRequest(_host_address);
+  auto result = _ieee802154.dataRequest(_host_address, _configuration.data_request_retries);
   EventGroupHandle_t event_group = xEventGroupCreate();
 
   if (result == Ieee802154::DataRequestResult::Failure) {
-    ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Failed to request data");
+    ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Failed to request data (attempts: %u, errors: %u, last_error: %d)",
+             result.attempts, result.errors, result.last_error);
     vEventGroupDelete(event_group);
     return false;
   }
 
   if (result == Ieee802154::DataRequestResult::NoDataAvailable) {
-    ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- No data available.");
+    ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- No data available (attempts: %u, ACK RSSI: %d, LQI: %u)",
+             result.attempts, result.ack_rssi, result.ack_lqi);
     vEventGroupDelete(event_group);
     return true;
   }
 
   // We have data. Wait for it.
-  ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Data available, waiting");
+  ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Data available, waiting (attempts: %u, ACK RSSI: %d, LQI: %u)",
+           result.attempts, result.ack_rssi, result.ack_lqi);
   uint32_t firmware_url_identifier = 0;
   uint32_t firmware_checksum_identifier = 0;
   uint32_t firmware_credentials_identifier = 0;
@@ -308,11 +352,12 @@ bool Ieee802154NetworkNode::requestData() {
         ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Timestamp response packet too small: %d bytes", decrypted.size());
         return;
       }
-      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingTimestampResponseV1");
+      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingTimestampResponseV1 (RSSI: %d, LQI: %u)", message.rssi,
+               message.lqi);
       Ieee802154NetworkShared::PendingTimestampResponseV1 *response =
           reinterpret_cast<Ieee802154NetworkShared::PendingTimestampResponseV1 *>(decrypted.data());
       auto timestamp = response->timestamp;
-      _pending_timestamp = timestamp;
+      pending_timestamp = timestamp;
       xEventGroupSetBits(event_group, REQUESTED_DATA_MESSAGE_ANY);
       break;
     }
@@ -322,8 +367,9 @@ bool Ieee802154NetworkNode::requestData() {
         ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Payload response packet too small: %d bytes", decrypted.size());
         return;
       }
-      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingPayloadResponseV1");
-      _pending_payload = std::vector<uint8_t>(
+      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingPayloadResponseV1 (RSSI: %d, LQI: %u)", message.rssi,
+               message.lqi);
+      pending_payload = std::vector<uint8_t>(
           decrypted.begin() + sizeof(Ieee802154NetworkShared::PendingPayloadResponseV1), decrypted.end());
       xEventGroupSetBits(event_group, REQUESTED_DATA_MESSAGE_ANY);
       break;
@@ -335,7 +381,8 @@ bool Ieee802154NetworkNode::requestData() {
                  decrypted.size());
         return;
       }
-      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingFirmwareWifiCredentialsResponseV1");
+      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingFirmwareWifiCredentialsResponseV1 (RSSI: %d, LQI: %u)",
+               message.rssi, message.lqi);
       Ieee802154NetworkShared::PendingFirmwareWifiCredentialsResponseV1 *response =
           reinterpret_cast<Ieee802154NetworkShared::PendingFirmwareWifiCredentialsResponseV1 *>(decrypted.data());
       if (!_pending_firmware) {
@@ -356,7 +403,8 @@ bool Ieee802154NetworkNode::requestData() {
         ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Firmware checksum packet too small: %d bytes", decrypted.size());
         return;
       }
-      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingFirmwareChecksumResponseV1");
+      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingFirmwareChecksumResponseV1 (RSSI: %d, LQI: %u)",
+               message.rssi, message.lqi);
       Ieee802154NetworkShared::PendingFirmwareChecksumResponseV1 *response =
           reinterpret_cast<Ieee802154NetworkShared::PendingFirmwareChecksumResponseV1 *>(decrypted.data());
       if (!_pending_firmware) {
@@ -375,7 +423,8 @@ bool Ieee802154NetworkNode::requestData() {
         ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Firmware url packet too small: %d bytes", decrypted.size());
         return;
       }
-      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingFirmwareUrlResponseV1");
+      ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Got PendingFirmwareUrlResponseV1 (RSSI: %d, LQI: %u)", message.rssi,
+               message.lqi);
       Ieee802154NetworkShared::PendingFirmwareUrlResponseV1 *response =
           reinterpret_cast<Ieee802154NetworkShared::PendingFirmwareUrlResponseV1 *>(decrypted.data());
       if (!_pending_firmware) {
@@ -486,17 +535,6 @@ bool Ieee802154NetworkNode::performFirmwareUpdateViaWifi(FirmwareUpdate &firmwar
   return true;
 }
 
-std::optional<uint64_t> Ieee802154NetworkNode::pendingTimestamp() {
-  auto pending = _pending_timestamp;
-  _pending_timestamp = std::nullopt;
-  return pending;
-}
-std::optional<std::vector<uint8_t>> Ieee802154NetworkNode::pendingPayload() {
-  auto pending = _pending_payload;
-  _pending_payload = std::nullopt;
-  return pending;
-}
-
 uint64_t Ieee802154NetworkNode::deviceMacAddress() const { return _ieee802154.deviceMacAddress(); }
 
 void Ieee802154NetworkNode::teardown() {
@@ -506,9 +544,25 @@ void Ieee802154NetworkNode::teardown() {
 }
 
 void Ieee802154NetworkNode::forget() {
+  _host_address = 0;
+  _channel = 0;
   _nvs_storage.eraseKey(NVS_KEY_HOST);
   _nvs_storage.eraseKey(NVS_KEY_CHANNEL);
 }
+
+void Ieee802154NetworkNode::setChannel(uint8_t channel) {
+  if (!_nvs_initialized) {
+    initializeNvs();
+    _nvs_initialized = true;
+  }
+  _channel = std::clamp(channel, (uint8_t)11, (uint8_t)26);
+  _ieee802154.setChannel(_channel);
+  _nvs_storage.writeToNVS(NVS_KEY_CHANNEL, _channel);
+}
+
+uint8_t Ieee802154NetworkNode::channel() const { return _channel; }
+
+uint64_t Ieee802154NetworkNode::hostMacAddress() const { return _host_address; }
 
 void Ieee802154NetworkNode::initializeNvs() {
   esp_err_t err = nvs_flash_init();

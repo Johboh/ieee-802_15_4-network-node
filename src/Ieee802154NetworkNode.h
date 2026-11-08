@@ -56,43 +56,80 @@ public:
      * Unknown allowed range.
      */
     int8_t tx_power = 20;
+    /**
+     * @brief How many times to try resending a data frame on failure (no ACK, busy CCA, etc.).
+     * Defaults to 30.
+     */
+    uint8_t data_frame_retries = 30;
+    /**
+     * @brief How many times to try resending a data request frame on failure (no ACK, busy CCA, etc.).
+     * Defaults to 30.
+     */
+    uint8_t data_request_retries = 30;
+    /**
+     * @brief How many times to try resending a discovery broadcast frame on failure (busy CCA, etc.).
+     * Defaults to 30.
+     */
+    uint8_t discovery_broadcast_retries = 30;
   };
 
   Ieee802154NetworkNode(Configuration configuration);
 
 public:
   /**
-   * Send a message to the host.
-   * If no host can be found or there is channel mismatch, will go into discovery mode and try to find the host.
-   * If a timestamp or payload was received during the send, the pendingTimestamp() and pendingPayload() functions will
-   * return this. In case of a firmware update, this function will never return and instead firmware will commence and
-   * the device will restart on update complete.
-   *
-   * @param message the message to send. Maximum message size is 74 bytes.
-   * @return true if message was delivered successfully.
+   * Result of a sendMessage() operation, including transmit status (attempts, errors, last error, ACK RSSI, ACK LQI)
+   * and any pending timestamp or payload received from the host.
+   * Converts implicitly to bool for easy `if (result)` checks.
    */
-  bool sendMessage(const std::vector<uint8_t> &message);
+  struct SendMessageResult : Ieee802154::TransmitStatus {
+    enum class Status {
+      Success,
+      Failure,
+    };
+    static constexpr Status Success = Status::Success;
+    static constexpr Status Failure = Status::Failure;
+
+    Status status = Status::Failure;
+    std::optional<uint64_t> timestamp;
+    std::optional<std::vector<uint8_t>> payload;
+
+    constexpr SendMessageResult() = default;
+    constexpr SendMessageResult(Status status) : Ieee802154::TransmitStatus(), status(status) {}
+    constexpr SendMessageResult(Status status, const Ieee802154::TransmitStatus &tx_status)
+        : Ieee802154::TransmitStatus(tx_status), status(status) {}
+    SendMessageResult(Status status, const Ieee802154::TransmitStatus &tx_status, std::optional<uint64_t> timestamp,
+                      std::optional<std::vector<uint8_t>> payload)
+        : Ieee802154::TransmitStatus(tx_status), status(status), timestamp(timestamp), payload(std::move(payload)) {}
+
+    constexpr operator Status() const { return status; }
+    constexpr operator bool() const { return status == Status::Success; }
+  };
+
   /**
    * Send a message to the host.
    * If no host can be found or there is channel mismatch, will go into discovery mode and try to find the host.
-   * If a timestamp or payload was received during the send, the pendingTimestamp() and pendingPayload() functions will
-   * return this. In case of a firmware update, this function will never return and instead firmware will commence and
+   * If a timestamp or payload was received during the send, it is returned in the timestamp and payload fields of the
+   * result. In case of a firmware update, this function will never return and instead firmware will commence and
+   * the device will restart on update complete.
+   *
+   * @param message the message to send. Maximum message size is 74 bytes.
+   * @return SendMessageResult indicating Success or Failure, along with attempts, errors, last_error, ack_rssi,
+   * ack_lqi, and any pending timestamp or payload.
+   */
+  SendMessageResult sendMessage(const std::vector<uint8_t> &message);
+  /**
+   * Send a message to the host.
+   * If no host can be found or there is channel mismatch, will go into discovery mode and try to find the host.
+   * If a timestamp or payload was received during the send, it is returned in the timestamp and payload fields of the
+   * result. In case of a firmware update, this function will never return and instead firmware will commence and
    * the device will restart on update complete.
    *
    * @param message the message to send.
    * @param message_size maxium message size is 74 bytes.
-   * @return true if message was delivered successfully.
+   * @return SendMessageResult indicating Success or Failure, along with attempts, errors, last_error, ack_rssi,
+   * ack_lqi, and any pending timestamp or payload.
    */
-  bool sendMessage(const uint8_t *message, uint8_t message_size);
-
-  /**
-   * If set, get the pending timestamp. Will clear any pending timestamp upon access.
-   */
-  std::optional<uint64_t> pendingTimestamp();
-  /**
-   * If set, get the pending payload. Will clear any pending payload upon access.
-   */
-  std::optional<std::vector<uint8_t>> pendingPayload();
+  SendMessageResult sendMessage(const uint8_t *message, uint8_t message_size);
 
   /**
    * return true to restart the device (default behavior), or false to not restart the device. Usually you want to
@@ -109,6 +146,25 @@ public:
   void setOnFirmwareUpdated(OnFirmwareUpdateComplete on_firmware_update_complete) {
     _on_firmware_update_complete = on_firmware_update_complete;
   }
+
+  /**
+   * @brief Change the 802.15.4 channel and persist it to NVS.
+   *
+   * @param channel channel number between 11 and 26.
+   */
+  void setChannel(uint8_t channel);
+
+  /**
+   * @brief Get the currently configured channel.
+   * Returns 0 if no channel has been configured or loaded from NVS yet.
+   */
+  uint8_t channel() const;
+
+  /**
+   * @brief Get the MAC address of the host this node is currently associated with.
+   * Returns 0 if not associated/discovered yet.
+   */
+  uint64_t hostMacAddress() const;
 
   /**
    * Forget any previous stored channel and host MAC address.
@@ -133,13 +189,14 @@ private:
   void teardown();
   Ieee802154::TransmitResult sendApplicationMessage(const uint8_t *message, uint8_t message_size);
   bool performDiscovery();
-  bool requestData();
+  bool requestData(std::optional<uint64_t> &pending_timestamp, std::optional<std::vector<uint8_t>> &pending_payload);
   bool performFirmwareUpdateViaWifi(FirmwareUpdate &firmware_update);
 
   struct DiscoveredHost {
     uint64_t mac_address;
     uint8_t channel;
     int8_t rssi;
+    uint8_t lqi;
   };
 
 private:
@@ -155,12 +212,8 @@ private:
 
 private:
   uint64_t _host_address = 0;
+  uint8_t _channel = 0;
   std::mutex _send_mutex;
   bool _nvs_initialized = false;
   OnFirmwareUpdateComplete _on_firmware_update_complete;
-
-  // Pending states
-private:
-  std::optional<uint64_t> _pending_timestamp;
-  std::optional<std::vector<uint8_t>> _pending_payload;
 };
