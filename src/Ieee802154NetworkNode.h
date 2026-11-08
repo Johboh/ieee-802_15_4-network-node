@@ -68,9 +68,10 @@ public:
     uint8_t data_request_retries = 30;
     /**
      * @brief How many times to try resending a discovery broadcast frame on failure (busy CCA, etc.).
-     * Defaults to 30.
+     * Defaults to 3 (since discovery already sends multiple broadcast attempts per channel, a low retry count avoids
+     * stalling on heavily Wi-Fi-congested channels).
      */
-    uint8_t discovery_broadcast_retries = 30;
+    uint8_t discovery_broadcast_retries = 3;
   };
 
   Ieee802154NetworkNode(Configuration configuration);
@@ -197,6 +198,7 @@ private:
     uint8_t channel;
     int8_t rssi;
     uint8_t lqi;
+    bool on_channel = false;
   };
 
 private:

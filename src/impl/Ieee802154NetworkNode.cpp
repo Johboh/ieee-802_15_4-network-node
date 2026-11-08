@@ -5,6 +5,7 @@
 #include <Ieee802154NetworkShared.h>
 #include <WiFiHelper.h>
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
@@ -207,9 +208,12 @@ bool Ieee802154NetworkNode::performDiscovery() {
 
   Ieee802154NetworkShared::DiscoveryRequestV1 discovery_request;
   std::vector<DiscoveredHost> discovered_hosts;
-  EventGroupHandle_t event_group = xEventGroupCreate();
+  std::atomic<uint8_t> current_scan_channel{26};
 
   _ieee802154.receive([&](Ieee802154::Message message) {
+    if (message.source_address == deviceMacAddress()) {
+      return; // Ignore own frames if reflected
+    }
     auto decrypted = _gcm_encryption.decrypt(message.payload);
     if (decrypted.empty()) {
       return;
@@ -222,18 +226,23 @@ bool Ieee802154NetworkNode::performDiscovery() {
       }
       Ieee802154NetworkShared::DiscoveryResponseV1 *response =
           reinterpret_cast<Ieee802154NetworkShared::DiscoveryResponseV1 *>(decrypted.data());
+      if (response->channel < 11 || response->channel > 26) {
+        ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Discovery response has invalid channel: %d", response->channel);
+        return;
+      }
 
+      uint8_t scanned_channel = current_scan_channel.load(std::memory_order_relaxed);
       DiscoveredHost host = {
           .mac_address = message.source_address,
           .channel = response->channel,
           .rssi = message.rssi,
           .lqi = message.lqi,
+          .on_channel = (response->channel == scanned_channel),
       };
       discovered_hosts.push_back(host);
-      xEventGroupSetBits(event_group, REQUESTED_DATA_MESSAGE_ANY);
       ESP_LOGI(Ieee802154NetworkNodeLog::TAG,
-               " -- Got discovery response from 0x%llx on channel %d with RSSI %d, LQI %u", host.mac_address,
-               host.channel, host.rssi, host.lqi);
+               " -- Got discovery response from 0x%llx on channel %d (scanned ch %d) with RSSI %d, LQI %u",
+               host.mac_address, host.channel, scanned_channel, host.rssi, host.lqi);
     } else {
       ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Got unknown message %d while waiting for device discovery response",
                message_id);
@@ -244,6 +253,7 @@ bool Ieee802154NetworkNode::performDiscovery() {
 
   // Try each channel multiple times to gather all possible hosts.
   for (uint8_t channel = 26; channel >= 11; --channel) {
+    current_scan_channel.store(channel, std::memory_order_relaxed);
     _ieee802154.setChannel(channel);
     for (uint8_t attempt = 1; attempt <= 4; ++attempt) {
       ESP_LOGI(Ieee802154NetworkNodeLog::TAG, " -- Broadcasting discovery on channel %d, attempt %d...", channel,
@@ -256,8 +266,11 @@ bool Ieee802154NetworkNode::performDiscovery() {
                  bcast_result.attempts, bcast_result.errors, bcast_result.last_error);
       }
 
-      // Wait a short time to collect responses. This clears the event bits after reading.
-      xEventGroupWaitBits(event_group, REQUESTED_DATA_MESSAGE_ANY, pdTRUE, pdFALSE, (30 / portTICK_PERIOD_MS));
+      // Wait a full 40 ms collection window after each broadcast.
+      // Unlike xEventGroupWaitBits (which aborts the wait as soon as the first host responds),
+      // a fixed window allows multiple hosts on the same channel (including any host doing a CCA/ACK retry)
+      // to finish responding without colliding with the next broadcast attempt or channel switch.
+      vTaskDelay(40 / portTICK_PERIOD_MS);
     }
   }
 
@@ -265,29 +278,36 @@ bool Ieee802154NetworkNode::performDiscovery() {
 
   if (discovered_hosts.empty()) {
     ESP_LOGW(Ieee802154NetworkNodeLog::TAG, " -- Never received any device discovery response");
-    vEventGroupDelete(event_group);
     return false;
   }
 
+  // Returns true if 'b' is better than 'a':
+  // 1. Genuine on-channel responses always beat cross-channel bleed responses.
+  // 2. Higher LQI (link quality / lower symbol error rate) beats lower LQI.
+  // 3. Higher RSSI (signal strength) acts as tie-breaker when LQI is equal (e.g. saturated at 255).
+  auto is_better_host = [](const DiscoveredHost &a, const DiscoveredHost &b) {
+    if (a.on_channel != b.on_channel) {
+      return !a.on_channel && b.on_channel;
+    }
+    if (a.lqi != b.lqi) {
+      return a.lqi < b.lqi;
+    }
+    return a.rssi < b.rssi;
+  };
+
   // Group responses by MAC address and keep only the best response for each host.
-  // Prioritize LQI (link quality / packet error rate) as the primary metric,
-  // using RSSI as a tie-breaker when LQI values are equal (e.g. saturated at 255).
-  // This avoids favoring cross-channel responses or noisy high-interference channels.
+  // This avoids favoring cross-channel responses or measurement anomalies.
   std::map<uint64_t, DiscoveredHost> best_per_host;
   for (const auto &host : discovered_hosts) {
     auto it = best_per_host.find(host.mac_address);
-    if (it == best_per_host.end() || host.lqi > it->second.lqi ||
-        (host.lqi == it->second.lqi && host.rssi > it->second.rssi)) {
+    if (it == best_per_host.end() || is_better_host(it->second, host)) {
       best_per_host[host.mac_address] = host;
     }
   }
 
-  // Find the overall best host among deduplicated entries (prioritizing LQI, then RSSI)
-  auto best_host_it = std::max_element(best_per_host.begin(), best_per_host.end(), [](const auto &a, const auto &b) {
-    if (a.second.lqi != b.second.lqi) {
-      return a.second.lqi < b.second.lqi;
-    }
-    return a.second.rssi < b.second.rssi;
+  // Find the overall best host among deduplicated entries
+  auto best_host_it = std::max_element(best_per_host.begin(), best_per_host.end(), [&](const auto &a, const auto &b) {
+    return is_better_host(a.second, b.second);
   });
 
   _channel = best_host_it->second.channel;
@@ -300,7 +320,6 @@ bool Ieee802154NetworkNode::performDiscovery() {
            best_host_it->second.mac_address, best_host_it->second.channel, best_host_it->second.rssi,
            best_host_it->second.lqi);
 
-  vEventGroupDelete(event_group);
   return true;
 }
 bool Ieee802154NetworkNode::requestData(std::optional<uint64_t> &pending_timestamp,
