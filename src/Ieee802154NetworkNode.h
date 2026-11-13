@@ -162,6 +162,16 @@ public:
   uint8_t channel() const;
 
   /**
+   * @brief Perform an energy detection (ED) measurement on the current channel.
+   *
+   * @param power Output parameter receiving the measured RF power in dBm.
+   * @param duration_symbols Duration in symbol periods (1 symbol = 16 us). Standard is 8 symbols (128 us).
+   * @param timeout_ms Max time in ms to wait for the measurement. Default is 50 ms.
+   * @return true if measurement succeeded, false on error or timeout.
+   */
+  bool energyDetect(int8_t &power, uint32_t duration_symbols = 8, uint32_t timeout_ms = 50);
+
+  /**
    * @brief Get the MAC address of the host this node is currently associated with.
    * Returns 0 if not associated/discovered yet.
    */

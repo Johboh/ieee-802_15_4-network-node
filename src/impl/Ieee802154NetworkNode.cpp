@@ -581,6 +581,32 @@ void Ieee802154NetworkNode::setChannel(uint8_t channel) {
 
 uint8_t Ieee802154NetworkNode::channel() const { return _channel; }
 
+bool Ieee802154NetworkNode::energyDetect(int8_t &power, uint32_t duration_symbols, uint32_t timeout_ms) {
+  std::scoped_lock lock(_send_mutex);
+
+  if (!_nvs_initialized) {
+    initializeNvs();
+    _nvs_initialized = true;
+  }
+
+  if (_channel == 0) {
+    uint8_t channel = 0;
+    if (_nvs_storage.readFromNVS(NVS_KEY_CHANNEL, channel)) {
+      _channel = channel;
+      _ieee802154.setChannel(_channel);
+    }
+  }
+
+  if (!_ieee802154.initialize(false)) {
+    ESP_LOGE(Ieee802154NetworkNodeLog::TAG, "Failed to initialize 802.15.4 radio");
+    return false;
+  }
+
+  bool ok = _ieee802154.energyDetect(power, duration_symbols, timeout_ms);
+  teardown();
+  return ok;
+}
+
 uint64_t Ieee802154NetworkNode::hostMacAddress() const { return _host_address; }
 
 void Ieee802154NetworkNode::initializeNvs() {
