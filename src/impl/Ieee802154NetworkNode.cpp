@@ -214,7 +214,8 @@ bool Ieee802154NetworkNode::performDiscovery() {
     if (message.source_address == deviceMacAddress()) {
       return; // Ignore own frames if reflected
     }
-    auto decrypted = _gcm_encryption.decrypt(message.payload);
+    auto decrypted = _gcm_encryption.decrypt(
+        message.payload, std::min(static_cast<size_t>(message.payload_size), sizeof(message.payload)));
     if (decrypted.empty()) {
       return;
     }
@@ -352,7 +353,8 @@ bool Ieee802154NetworkNode::requestData(std::optional<uint64_t> &pending_timesta
   std::optional<FirmwareUpdate> _pending_firmware;
   bool rediscover_requested = false;
   _ieee802154.receive([&](Ieee802154::Message message) {
-    auto decrypted = _gcm_encryption.decrypt(message.payload);
+    auto decrypted = _gcm_encryption.decrypt(
+        message.payload, std::min(static_cast<size_t>(message.payload_size), sizeof(message.payload)));
     if (decrypted.empty()) {
       return;
     }
